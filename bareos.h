@@ -7,6 +7,7 @@
  *    #include "bareos.h"
  *
  *  DEPENDS ON
+ *    baretime.h (time inclusion)
  *    barestd.h  (Arena, Str, Slice)
  *
  *  DESIGN
@@ -37,6 +38,8 @@
 
 #ifndef BAREOS_H
 #define BAREOS_H
+
+#include "baretime.h"
 
 #include <stdbool.h>
 #include <stdint.h>

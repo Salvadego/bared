@@ -32,8 +32,6 @@
 #ifndef BARESYNC_H
 #define BARESYNC_H
 
-#include "barestd.h"
-
 #if defined(_WIN32) || defined(_WIN64)
 #        define _BS_WIN
 #        ifndef WIN32_LEAN_AND_MEAN
@@ -47,6 +45,8 @@
 #        endif
 #        include <pthread.h>
 #endif
+
+#include "barestd.h"
 
 /* ================================================================
  *  Mutex

@@ -3,7 +3,7 @@
  * ============================================
  *
  *  USAGE
- *    #define STRBUILDER_IMPLEMENTATION
+ *    #define BAREBUILDER_IMPLEMENTATION
  *    #include "strbuilder.h"
  *
  *  DEPENDS ON
@@ -33,8 +33,8 @@
  *    // scratch buffer is gone; result lives in a
  */
 
-#ifndef STRBUILDER_H
-#define STRBUILDER_H
+#ifndef BAREBUILDER_H
+#define BAREBUILDER_H
 
 #include <stdarg.h>
 
@@ -78,7 +78,7 @@ void sb_reset(StrBuilder* sb);
 /* ================================================================
  *  IMPLEMENTATION
  * ================================================================ */
-#ifdef STRBUILDER_IMPLEMENTATION
+#ifdef BAREBUILDER_IMPLEMENTATION
 
 #        include <stdarg.h>
 #        include <stdio.h>
@@ -175,5 +175,5 @@ void sb_reset(StrBuilder* sb) {
         sb->buf  = slice_make(a, char, 256);
 }
 
-#endif /* STRBUILDER_IMPLEMENTATION */
-#endif /* STRBUILDER_H */
+#endif /* BAREBUILDER_IMPLEMENTATION */
+#endif /* BAREBUILDER_H */

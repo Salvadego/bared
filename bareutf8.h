@@ -3,7 +3,7 @@
  * ======================================================
  *
  *  USAGE
- *    #define UTF8_IMPLEMENTATION
+ *    #define BAREUTF8_IMPLEMENTATION
  *    #include "utf8.h"
  *
  *  DEPENDS ON
@@ -33,8 +33,8 @@
  *      fwrite(r.bytes, 1, (size_t)n, f);
  */
 
-#ifndef UTF8_H
-#define UTF8_H
+#ifndef BAREUTF8_H
+#define BAREUTF8_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -120,7 +120,7 @@ Rune rune_to_lower(Rune r);
 /* ================================================================
  *  IMPLEMENTATION
  * ================================================================ */
-#ifdef UTF8_IMPLEMENTATION
+#ifdef BAREUTF8_IMPLEMENTATION
 
 #        include <string.h>
 
@@ -334,5 +334,5 @@ Rune rune_to_lower(Rune r) {
         return r;
 }
 
-#endif /* UTF8_IMPLEMENTATION */
-#endif /* UTF8_H */
+#endif /* BAREUTF8_IMPLEMENTATION */
+#endif /* BAREUTF8_H */
