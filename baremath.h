@@ -7,6 +7,7 @@
  *    #include "baremath.h"
  *
  *  DEPENDS ON
+ *    barestd.h  (StaticAssert, integer types)
  *    <math.h>   (transcendental functions delegated to libc)
  *
  *  SECTIONS
@@ -14,21 +15,26 @@
  *    S1   Type punning unions  -- F32, F64, with bit-field overlays
  *    S2   Special values       -- NaN, Inf, predicates
  *    S3   Basic float ops      -- abs, ceil, floor, round, trunc, sign, dim
- *    S4   Trigonometric        -- sin, cos, tan, asin, acos, atan, atan2, sincos
- *    S5   Hyperbolic           -- sinh, cosh, tanh, asinh, acosh, atanh
- *    S6   Exponential & log    -- exp, exp2, expm1, log, log2, log10, log1p, logb
- *    S7   Power & root         -- sqrt, cbrt, pow, pow10, hypot
- *    S8   FP utilities i       -- frexp, ldexp, modf, ilogb, nextafter, copysign, remainder, fmod, fma
- *    S9   Special functions    -- erf, erfc, erfinv, erfcinv, gamma, lgamma, Bessel J0/J1/Jn/Y0/Y1/Yn
- *    S10  Integer math         -- gcd, lcm, log2_floor, * next_pow2, isqrt, abs
- *    S11  Bit operations       -- popcount, clz, ctz, bswap, rol, ror, bit_extract, bit_insert
- *    S12  Overflow arithmetic  -- add/sub/mul with overflow detection
- *    S13  Fixed-point          -- Q16.16 and Q8.24 types with full arithmetic
- *    S14  2D/3D/4D vectors     -- union overlay (named fields + array access)
- *    S15  Hashing              -- SipHash-1-3, xxHash32, xxHash64, Murmur3-32
+ *    S4   Trigonometric        -- sin, cos, tan, asin, acos, atan, atan2,
+ * sincos S5   Hyperbolic           -- sinh, cosh, tanh, asinh, acosh, atanh S6
+ * Exponential & log    -- exp, exp2, expm1, log, log2, log10, log1p, logb S7
+ * Power & root         -- sqrt, cbrt, pow, pow10, hypot S8   FP utilities --
+ * frexp, ldexp, modf, ilogb, nextafter, copysign, remainder, fmod, fma S9
+ * Special functions    -- erf, erfc, erfinv, erfcinv, gamma, lgamma, Bessel
+ * J0/J1/Jn/Y0/Y1/Yn S10  Integer math         -- gcd, lcm, log2_floor,
+ * next_pow2, isqrt, abs S11  Bit operations       -- popcount, clz, ctz, bswap,
+ * rol, ror, bit_extract, bit_insert S12  Overflow arithmetic  -- add/sub/mul
+ * with overflow detection S13  Fixed-point          -- Q16.16 and Q8.24 types
+ * with full arithmetic S14  2D/3D/4D vectors     -- union overlay (named fields
+ * + array access) S15  Hashing              -- SipHash-1-3, xxHash32, xxHash64,
+ * Murmur3-32
  *
  *  DESIGN NOTES
  *    - All Go math package functions are provided with a math_ prefix.
+ *    - Type punning unions are standard C99 -- reading a union member
+ *      other than the last written is defined in C (unlike C++).
+ *    - Anonymous structs inside unions require C11 or a GCC/Clang extension
+ *      (-fms-extensions or __extension__). They are guarded with a check.
  *    - Transcendental functions delegate to <math.h>; the wrappers exist
  *      so the caller never needs to include <math.h> directly.
  *    - Fixed-point types are structs containing a single int32_t raw field
@@ -53,38 +59,40 @@
 #        include <stddef.h>
 #        include <stdint.h>
 
+#        include "barestd.h"
+
 /* ================================================================
  *  S0 -- Constants
  * ================================================================ */
 
 #        define MATH_E 2.71828182845904523536 /* e                          */
 #        define MATH_LOG2E \
-        1.44269504088896340736 /* log2(e)                    */
+                1.44269504088896340736 /* log2(e)                    */
 #        define MATH_LOG10E \
-        0.43429448190325182765          /* log10(e)                   */
+                0.43429448190325182765          /* log10(e)                   */
 #        define MATH_LN2 0.69314718055994530942 /* ln(2) */
 #        define MATH_LN10 \
-        2.30258509299404568402         /* ln(10)                     */
+                2.30258509299404568402         /* ln(10)                     */
 #        define MATH_PI 3.14159265358979323846 /* pi */
 #        define MATH_TAU \
-        6.28318530717958647692 /* 2pi                         */
+                6.28318530717958647692 /* 2pi                         */
 #        define MATH_PI_2 \
-        1.57079632679489661923 /* pi/2                        */
+                1.57079632679489661923 /* pi/2                        */
 #        define MATH_PI_4 \
-        0.78539816339744830962 /* pi/4                        */
+                0.78539816339744830962 /* pi/4                        */
 #        define MATH_1_PI \
-        0.31830988618379067154 /* 1/pi                        */
+                0.31830988618379067154 /* 1/pi                        */
 #        define MATH_2_PI \
-        0.63661977236758134308 /* 2/pi                        */
+                0.63661977236758134308 /* 2/pi                        */
 #        define MATH_2_SQRTPI \
-        1.12837916709551257390 /* 2/sqrtpi                       */
+                1.12837916709551257390 /* 2/sqrtpi                       */
 #        define MATH_SQRT2 \
-        1.41421356237309504880 /* sqrt2                         */
+                1.41421356237309504880 /* sqrt2                         */
 #        define MATH_SQRT1_2 \
-        0.70710678118654752440 /* 1/sqrt2                       */
+                0.70710678118654752440 /* 1/sqrt2                       */
 #        define MATH_PHI 1.61803398874989484820 /* golden ratio */
 #        define MATH_SQRT3 \
-        1.73205080756887729353 /* sqrt3                         */
+                1.73205080756887729353 /* sqrt3                         */
 
 #        define MATH_F32_MAX 3.40282346638528859812e+38f
 #        define MATH_F32_MIN 1.17549435082228750797e-38f /* smallest normal */
@@ -109,7 +117,6 @@
  *  (x86, ARM, RISC-V) the layout below is correct.
  * ================================================================ */
 
-// TODO: represent sign, exponent, mantissa as a struct for easier access.
 typedef union {
         float    f; /* value access                  */
         uint32_t u; /* raw 32-bit pattern            */
@@ -148,7 +155,7 @@ static inline F64 f64_from_bits(uint64_t u) {
 }
 
 /* Go-compatible: Float32bits / Float32frombits / Float64bits / Float64frombits
-*/
+ */
 static inline uint32_t math_float32bits(float f) {
         F32 r;
         r.f = f;
@@ -302,12 +309,11 @@ static inline double math_inv_lerp(double a, double b, double v) {
 
 /* Remap value from [in_lo,in_hi] to [out_lo,out_hi] */
 static inline double math_remap(
-                double v, double in_lo, double in_hi, double out_lo, double out_hi) {
+    double v, double in_lo, double in_hi, double out_lo, double out_hi) {
         return out_lo + (v - in_lo) / (in_hi - in_lo) * (out_hi - out_lo);
 }
 
 /* Smooth step (Ken Perlin) */
-/* Modified from wikipedia: https://en.wikipedia.org/wiki/Smoothstep */
 static inline double math_smoothstep(double edge0, double edge1, double x) {
         double t = math_clampd((x - edge0) / (edge1 - edge0), 0.0, 1.0);
         return t * t * (3.0 - 2.0 * t);
@@ -438,7 +444,7 @@ static inline double math_hypot(double p, double q) {
         return hypot(p, q);
 }
 
-/* Fast inverse square root (approximation) */
+/* Fast inverse square root (approximation -- useful for games/graphics) */
 static inline float math_inv_sqrtf_fast(float x) {
         float xh = 0.5f * x;
         F32   r;
@@ -513,7 +519,7 @@ static inline double math_lgamma(double x, int* sign) {
 
 /* Go: Bessel functions J0, J1, Jn, Y0, Y1, Yn */
 #        if defined(__USE_XOPEN) || defined(__USE_MISC) || \
-        defined(__APPLE__) || defined(__MACH__)
+            defined(__APPLE__) || defined(__MACH__)
 static inline double math_j0(double x) {
         return j0(x);
 }
@@ -625,9 +631,9 @@ static inline uint64_t bit_extract(uint64_t x, uint32_t lo, uint32_t len) {
 }
 /* Replace bits [lo, lo+len) in x with val */
 static inline uint64_t bit_insert(uint64_t x,
-                uint64_t val,
-                uint32_t lo,
-                uint32_t len) {
+                                  uint64_t val,
+                                  uint32_t lo,
+                                  uint32_t len) {
         uint64_t mask = ((UINT64_C(1) << len) - 1) << lo;
         return (x & ~mask) | ((val << lo) & mask);
 }
@@ -787,137 +793,124 @@ static inline Q8_24 q8_div(Q8_24 a, Q8_24 b) {
 /* ================================================================
  *  S14 -- 2D / 3D / 4D vector types
  *
- *  TODO: add special macros for easier union access
+ *  Plain structs with named fields -- valid ISO C99 everywhere.
+ *  No unions, no anonymous structs, no compiler extensions.
  *
- *  Vec2: two named overlays + e[2]
- *    v.xy.x / v.xy.y        -- spatial / generic
- *    v.uv.u / v.uv.v        -- texture coordinates
- *    v.e[0] / v.e[1]        -- array access for loops/SIMD
+ *  Field access:  v.x, v.y, v.z, v.w
+ *  Array access:  vec2_get(v, i) / vec3_get(v, i) etc.
+ *  Colour aliases via explicit constructors: vec4_rgba(r,g,b,a)
+ *  Conversions:   vec3_from_vec4(v), vec4_from_vec3(v, w), ...
  *
- *  Vec3: three named overlays + e[3]
- *    v.xyz.x/y/z            -- spatial
- *    v.rgb.r/g/b            -- colour
- *    v.e[0..2]
- *
- *  Vec4: six named overlays + e[4]
- *    v.xyzw.x/y/z/w         -- homogeneous / spatial
- *    v.rgba.r/g/b/a         -- colour with alpha
- *    v.stpq.s/t/p/q         -- GLSL texture coords
- *    v.lo.x/y, v.hi.x/y    -- low two / high two floats as Vec2
- *    v.xyz3.xyz (Vec3)      -- drop w, get xyz
- *    v.e[0..3]
- *
- *  Helper functions for sub-vector extraction:
- *    vec3_xy(v)             -> Vec2 {x,y}
- *    vec4_xyz(v)            -> Vec3 {x,y,z}
- *    vec4_lo(v)             -> Vec2 {x,y}
- *    vec4_hi(v)             -> Vec2 {z,w}
+ *  Integer variants: Vec2i, Vec3i (int32_t fields x/y/z)
+ *  Double  variants: Vec2d, Vec3d, Vec4d (double fields x/y/z/w)
  * ================================================================ */
 
-/* helper structs -- named members inside the vector unions */
 typedef struct {
         float x, y;
-} _V2xy;
-typedef struct {
-        float u, v;
-} _V2uv;
-typedef struct {
-        float w, h;
-} _V2wh;
+} Vec2;
 typedef struct {
         float x, y, z;
-} _V3xyz;
-typedef struct {
-        float r, g, b;
-} _V3rgb;
+} Vec3;
 typedef struct {
         float x, y, z, w;
-} _V4xyzw;
-typedef struct {
-        float r, g, b, a;
-} _V4rgba;
-typedef struct {
-        float s, t, p, q;
-} _V4stpq;
-
-/* Vec2 -- fully defined first so Vec3/Vec4 can embed it */
-typedef union {
-        _V2xy xy; /* v.xy.x, v.xy.y   */
-        _V2uv uv; /* v.uv.u, v.uv.v   */
-        _V2wh wh; /* v.wh.w, v.wh.h   */
-        float e[2];
-} Vec2;
-
-/* Vec3 -- fully defined before Vec4 */
-typedef union {
-        _V3xyz xyz; /* v.xyz.x/y/z      */
-        _V3rgb rgb; /* v.rgb.r/g/b      */
-        float  e[3];
-} Vec3;
-
-/* Composite helper structs for Vec4 -- defined after Vec2/Vec3 are complete */
-typedef struct {
-        Vec2 lo;
-        Vec2 hi;
-} _V4lohi; /* v.lohi.lo / v.lohi.hi */
-typedef struct {
-        Vec3  xyz;
-        float w;
-} _V4xyz3; /* v.xyz3.xyz            */
-
-/* Vec4 */
-typedef union {
-        _V4xyzw xyzw; /* v.xyzw.x/y/z/w  */
-        _V4rgba rgba; /* v.rgba.r/g/b/a  */
-        _V4stpq stpq; /* v.stpq.s/t/p/q  */
-        _V4lohi lohi; /* v.lohi.lo / hi  */
-        _V4xyz3 xyz3; /* v.xyz3.xyz       */
-        float   e[4];
 } Vec4;
-
-/* Integer and double variants (spatial names only) */
 typedef struct {
         int32_t x, y;
-} _V2ixy;
+} Vec2i;
 typedef struct {
         int32_t x, y, z;
-} _V3ixyz;
-typedef union {
-        _V2ixy  xy;
-        int32_t e[2];
-} Vec2i;
-typedef union {
-        _V3ixyz xyz;
-        int32_t e[3];
 } Vec3i;
-
 typedef struct {
         double x, y;
-} _V2dxy;
+} Vec2d;
 typedef struct {
         double x, y, z;
-} _V3dxyz;
+} Vec3d;
 typedef struct {
         double x, y, z, w;
-} _V4dxyzw;
-typedef union {
-        _V2dxy xy;
-        double e[2];
-} Vec2d;
-typedef union {
-        _V3dxyz xyz;
-        double  e[3];
-} Vec3d;
-typedef union {
-        _V4dxyzw xyzw;
-        double   e[4];
 } Vec4d;
+
+/* Array access -- implementation-defined but works on all mainstream
+   platforms (x86, ARM, RISC-V) where structs are packed without padding
+   for uniform float/int/double members. */
+static inline float vec2_get(Vec2 v, int i) {
+        return ((float*)&v)[i];
+}
+static inline float vec3_get(Vec3 v, int i) {
+        return ((float*)&v)[i];
+}
+static inline float vec4_get(Vec4 v, int i) {
+        return ((float*)&v)[i];
+}
+static inline int32_t vec2i_get(Vec2i v, int i) {
+        return ((int32_t*)&v)[i];
+}
+static inline int32_t vec3i_get(Vec3i v, int i) {
+        return ((int32_t*)&v)[i];
+}
+static inline double vec2d_get(Vec2d v, int i) {
+        return ((double*)&v)[i];
+}
+static inline double vec3d_get(Vec3d v, int i) {
+        return ((double*)&v)[i];
+}
+static inline double vec4d_get(Vec4d v, int i) {
+        return ((double*)&v)[i];
+}
+
+/* Conversions between types */
+static inline Vec2 vec2_from_vec3(Vec3 v) {
+        Vec2 r;
+        r.x = v.x;
+        r.y = v.y;
+        return r;
+}
+static inline Vec3 vec3_from_vec4(Vec4 v) {
+        Vec3 r;
+        r.x = v.x;
+        r.y = v.y;
+        r.z = v.z;
+        return r;
+}
+static inline Vec4 vec4_from_vec3(Vec3 v, float w) {
+        Vec4 r;
+        r.x = v.x;
+        r.y = v.y;
+        r.z = v.z;
+        r.w = w;
+        return r;
+}
+
+/* Colour alias constructors (map r/g/b/a -> x/y/z/w) */
+static inline Vec4 vec4_rgba(float r, float g, float b, float a) {
+        Vec4 v;
+        v.x = r;
+        v.y = g;
+        v.z = b;
+        v.w = a;
+        return v;
+}
+static inline Vec3 vec3_rgb(float r, float g, float b) {
+        Vec3 v;
+        v.x = r;
+        v.y = g;
+        v.z = b;
+        return v;
+}
+
+/* UV alias constructor */
+static inline Vec2 vec2_uv(float u, float v_) {
+        Vec2 v;
+        v.x = u;
+        v.y = v_;
+        return v;
+}
 
 /* ---- Vec2 --------------------------------------------------- */
 static inline Vec2 vec2(float x, float y) {
         Vec2 v;
-        v.xy.x = x;
-        v.xy.y = y;
+        v.x = x;
+        v.y = y;
         return v;
 }
 static inline Vec2 vec2_zero(void) {
@@ -927,22 +920,22 @@ static inline Vec2 vec2_one(void) {
         return vec2(1, 1);
 }
 static inline Vec2 vec2_add(Vec2 a, Vec2 b) {
-        return vec2(a.e[0] + b.e[0], a.e[1] + b.e[1]);
+        return vec2(a.x + b.x, a.y + b.y);
 }
 static inline Vec2 vec2_sub(Vec2 a, Vec2 b) {
-        return vec2(a.e[0] - b.e[0], a.e[1] - b.e[1]);
+        return vec2(a.x - b.x, a.y - b.y);
 }
 static inline Vec2 vec2_mul(Vec2 a, Vec2 b) {
-        return vec2(a.e[0] * b.e[0], a.e[1] * b.e[1]);
+        return vec2(a.x * b.x, a.y * b.y);
 }
 static inline Vec2 vec2_scale(Vec2 a, float s) {
-        return vec2(a.e[0] * s, a.e[1] * s);
+        return vec2(a.x * s, a.y * s);
 }
 static inline Vec2 vec2_neg(Vec2 a) {
-        return vec2(-a.e[0], -a.e[1]);
+        return vec2(-a.x, -a.y);
 }
 static inline float vec2_dot(Vec2 a, Vec2 b) {
-        return a.e[0] * b.e[0] + a.e[1] * b.e[1];
+        return a.x * b.x + a.y * b.y;
 }
 static inline float vec2_len2(Vec2 a) {
         return vec2_dot(a, a);
@@ -955,7 +948,7 @@ static inline Vec2 vec2_norm(Vec2 a) {
         return l > 0 ? vec2_scale(a, 1.0f / l) : vec2_zero();
 }
 static inline float vec2_cross(Vec2 a, Vec2 b) {
-        return a.e[0] * b.e[1] - a.e[1] * b.e[0];
+        return a.x * b.y - a.y * b.x;
 }
 static inline Vec2 vec2_lerp(Vec2 a, Vec2 b, float t) {
         return vec2_add(a, vec2_scale(vec2_sub(b, a), t));
@@ -964,7 +957,7 @@ static inline float vec2_dist(Vec2 a, Vec2 b) {
         return vec2_len(vec2_sub(b, a));
 }
 static inline Vec2 vec2_perp(Vec2 a) {
-        return vec2(-a.xy.y, a.xy.x);
+        return vec2(-a.y, a.x);
 }
 static inline Vec2 vec2_reflect(Vec2 v, Vec2 n) {
         return vec2_sub(v, vec2_scale(n, 2.0f * vec2_dot(v, n)));
@@ -973,9 +966,9 @@ static inline Vec2 vec2_reflect(Vec2 v, Vec2 n) {
 /* ---- Vec3 --------------------------------------------------- */
 static inline Vec3 vec3(float x, float y, float z) {
         Vec3 v;
-        v.xyz.x = x;
-        v.xyz.y = y;
-        v.xyz.z = z;
+        v.x = x;
+        v.y = y;
+        v.z = z;
         return v;
 }
 static inline Vec3 vec3_zero(void) {
@@ -985,22 +978,22 @@ static inline Vec3 vec3_one(void) {
         return vec3(1, 1, 1);
 }
 static inline Vec3 vec3_add(Vec3 a, Vec3 b) {
-        return vec3(a.e[0] + b.e[0], a.e[1] + b.e[1], a.e[2] + b.e[2]);
+        return vec3(a.x + b.x, a.y + b.y, a.z + b.z);
 }
 static inline Vec3 vec3_sub(Vec3 a, Vec3 b) {
-        return vec3(a.e[0] - b.e[0], a.e[1] - b.e[1], a.e[2] - b.e[2]);
+        return vec3(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 static inline Vec3 vec3_mul(Vec3 a, Vec3 b) {
-        return vec3(a.e[0] * b.e[0], a.e[1] * b.e[1], a.e[2] * b.e[2]);
+        return vec3(a.x * b.x, a.y * b.y, a.z * b.z);
 }
 static inline Vec3 vec3_scale(Vec3 a, float s) {
-        return vec3(a.e[0] * s, a.e[1] * s, a.e[2] * s);
+        return vec3(a.x * s, a.y * s, a.z * s);
 }
 static inline Vec3 vec3_neg(Vec3 a) {
-        return vec3(-a.e[0], -a.e[1], -a.e[2]);
+        return vec3(-a.x, -a.y, -a.z);
 }
 static inline float vec3_dot(Vec3 a, Vec3 b) {
-        return a.e[0] * b.e[0] + a.e[1] * b.e[1] + a.e[2] * b.e[2];
+        return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 static inline float vec3_len2(Vec3 a) {
         return vec3_dot(a, a);
@@ -1013,9 +1006,9 @@ static inline Vec3 vec3_norm(Vec3 a) {
         return l > 0 ? vec3_scale(a, 1.0f / l) : vec3_zero();
 }
 static inline Vec3 vec3_cross(Vec3 a, Vec3 b) {
-        return vec3(a.e[1] * b.e[2] - a.e[2] * b.e[1],
-                        a.e[2] * b.e[0] - a.e[0] * b.e[2],
-                        a.e[0] * b.e[1] - a.e[1] * b.e[0]);
+        return vec3(a.y * b.z - a.z * b.y,
+                    a.z * b.x - a.x * b.z,
+                    a.x * b.y - a.y * b.x);
 }
 static inline Vec3 vec3_lerp(Vec3 a, Vec3 b, float t) {
         return vec3_add(a, vec3_scale(vec3_sub(b, a), t));
@@ -1030,21 +1023,21 @@ static inline Vec3 vec3_refract(Vec3 v, Vec3 n, float eta) {
         float d = vec3_dot(v, n);
         float k = 1.0f - eta * eta * (1.0f - d * d);
         return k < 0 ? vec3_zero()
-                : vec3_sub(vec3_scale(v, eta),
+                     : vec3_sub(vec3_scale(v, eta),
                                 vec3_scale(n, eta * d + sqrtf(k)));
 }
 /* Extract sub-vector */
 static inline Vec2 vec3_xy(Vec3 v) {
-        return vec2(v.xyz.x, v.xyz.y);
+        return vec2(v.x, v.y);
 }
 
 /* ---- Vec4 --------------------------------------------------- */
 static inline Vec4 vec4(float x, float y, float z, float w) {
         Vec4 v;
-        v.xyzw.x = x;
-        v.xyzw.y = y;
-        v.xyzw.z = z;
-        v.xyzw.w = w;
+        v.x = x;
+        v.y = y;
+        v.z = z;
+        v.w = w;
         return v;
 }
 static inline Vec4 vec4_zero(void) {
@@ -1054,19 +1047,16 @@ static inline Vec4 vec4_one(void) {
         return vec4(1, 1, 1, 1);
 }
 static inline Vec4 vec4_add(Vec4 a, Vec4 b) {
-        return vec4(
-                        a.e[0] + b.e[0], a.e[1] + b.e[1], a.e[2] + b.e[2], a.e[3] + b.e[3]);
+        return vec4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w);
 }
 static inline Vec4 vec4_sub(Vec4 a, Vec4 b) {
-        return vec4(
-                        a.e[0] - b.e[0], a.e[1] - b.e[1], a.e[2] - b.e[2], a.e[3] - b.e[3]);
+        return vec4(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w);
 }
 static inline Vec4 vec4_scale(Vec4 a, float s) {
-        return vec4(a.e[0] * s, a.e[1] * s, a.e[2] * s, a.e[3] * s);
+        return vec4(a.x * s, a.y * s, a.z * s, a.w * s);
 }
 static inline float vec4_dot(Vec4 a, Vec4 b) {
-        return a.e[0] * b.e[0] + a.e[1] * b.e[1] + a.e[2] * b.e[2] +
-                a.e[3] * b.e[3];
+        return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
 }
 static inline float vec4_len(Vec4 a) {
         return sqrtf(vec4_dot(a, a));
@@ -1080,13 +1070,13 @@ static inline Vec4 vec4_lerp(Vec4 a, Vec4 b, float t) {
 }
 /* Extract sub-vectors */
 static inline Vec3 vec4_xyz(Vec4 v) {
-        return v.xyz3.xyz;
+        return vec3(v.x, v.y, v.z);
 }
 static inline Vec2 vec4_lo(Vec4 v) {
-        return v.lohi.lo;
+        return vec2(v.x, v.y);
 }
 static inline Vec2 vec4_hi(Vec4 v) {
-        return v.lohi.hi;
+        return vec2(v.z, v.w);
 }
 
 /* ---- Quaternion (stored as Vec4: xyzw, w = real part) ------- */
@@ -1094,17 +1084,13 @@ static inline Vec4 quat_identity(void) {
         return vec4(0, 0, 0, 1);
 }
 static inline Vec4 quat_mul(Vec4 a, Vec4 b) {
-        return vec4(a.e[3] * b.e[0] + a.e[0] * b.e[3] + a.e[1] * b.e[2] -
-                        a.e[2] * b.e[1],
-                        a.e[3] * b.e[1] - a.e[0] * b.e[2] + a.e[1] * b.e[3] +
-                        a.e[2] * b.e[0],
-                        a.e[3] * b.e[2] + a.e[0] * b.e[1] - a.e[1] * b.e[0] +
-                        a.e[2] * b.e[3],
-                        a.e[3] * b.e[3] - a.e[0] * b.e[0] - a.e[1] * b.e[1] -
-                        a.e[2] * b.e[2]);
+        return vec4(a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+                    a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+                    a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+                    a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z);
 }
 static inline Vec4 quat_conj(Vec4 q) {
-        return vec4(-q.e[0], -q.e[1], -q.e[2], q.e[3]);
+        return vec4(-q.x, -q.y, -q.z, q.w);
 }
 static inline Vec4 quat_norm(Vec4 q) {
         return vec4_norm(q);
@@ -1112,12 +1098,12 @@ static inline Vec4 quat_norm(Vec4 q) {
 static inline Vec4 quat_from_axis_angle(Vec3 axis, float angle) {
         float s = sinf(angle * 0.5f), c = cosf(angle * 0.5f);
         Vec3  a = vec3_norm(axis);
-        return vec4(a.e[0] * s, a.e[1] * s, a.e[2] * s, c);
+        return vec4(a.x * s, a.y * s, a.z * s, c);
 }
 static inline Vec3 quat_rotate_vec3(Vec4 q, Vec3 v) {
-        Vec3 qv = vec3(q.e[0], q.e[1], q.e[2]);
+        Vec3 qv = vec3(q.x, q.y, q.z);
         Vec3 t  = vec3_scale(vec3_cross(qv, v), 2.0f);
-        return vec3_add(vec3_add(v, vec3_scale(t, q.e[3])), vec3_cross(qv, t));
+        return vec3_add(vec3_add(v, vec3_scale(t, q.w)), vec3_cross(qv, t));
 }
 static inline Vec4 quat_slerp(Vec4 a, Vec4 b, float t) {
         float d = vec4_dot(a, b);
@@ -1149,18 +1135,15 @@ static inline Mat4 mat4_mul(Mat4 a, Mat4 b) {
                 for (j = 0; j < 4; j++)
                         for (k = 0; k < 4; k++)
                                 r.e[i * 4 + j] +=
-                                        a.e[k * 4 + j] * b.e[i * 4 + k];
+                                    a.e[k * 4 + j] * b.e[i * 4 + k];
         return r;
 }
 static inline Vec4 mat4_mul_vec4(Mat4 m, Vec4 v) {
-        return vec4(m.e[0] * v.e[0] + m.e[4] * v.e[1] + m.e[8] * v.e[2] +
-                        m.e[12] * v.e[3],
-                        m.e[1] * v.e[0] + m.e[5] * v.e[1] + m.e[9] * v.e[2] +
-                        m.e[13] * v.e[3],
-                        m.e[2] * v.e[0] + m.e[6] * v.e[1] + m.e[10] * v.e[2] +
-                        m.e[14] * v.e[3],
-                        m.e[3] * v.e[0] + m.e[7] * v.e[1] + m.e[11] * v.e[2] +
-                        m.e[15] * v.e[3]);
+        return vec4(
+            m.e[0] * v.x + m.e[4] * v.y + m.e[8] * v.z + m.e[12] * v.w,
+            m.e[1] * v.x + m.e[5] * v.y + m.e[9] * v.z + m.e[13] * v.w,
+            m.e[2] * v.x + m.e[6] * v.y + m.e[10] * v.z + m.e[14] * v.w,
+            m.e[3] * v.x + m.e[7] * v.y + m.e[11] * v.z + m.e[15] * v.w);
 }
 Mat4 mat4_perspective(float fovy_rad, float aspect, float near, float far);
 Mat4 mat4_look_at(Vec3 eye, Vec3 center, Vec3 up);
@@ -1344,7 +1327,7 @@ uint32_t bit_popcount32(uint32_t x) {
 }
 uint32_t bit_popcount64(uint64_t x) {
         return bit_popcount32((uint32_t)x) +
-                bit_popcount32((uint32_t)(x >> 32));
+               bit_popcount32((uint32_t)(x >> 32));
 }
 uint32_t bit_clz32(uint32_t x) {
         uint32_t n = 0;
@@ -1384,11 +1367,11 @@ uint16_t bit_bswap16(uint16_t x) {
 }
 uint32_t bit_bswap32(uint32_t x) {
         return ((x & 0xFF000000u) >> 24) | ((x & 0x00FF0000u) >> 8) |
-                ((x & 0x0000FF00u) << 8) | ((x & 0x000000FFu) << 24);
+               ((x & 0x0000FF00u) << 8) | ((x & 0x000000FFu) << 24);
 }
 uint64_t bit_bswap64(uint64_t x) {
         return ((uint64_t)bit_bswap32((uint32_t)x) << 32) |
-                (uint64_t)bit_bswap32((uint32_t)(x >> 32));
+               (uint64_t)bit_bswap32((uint32_t)(x >> 32));
 }
 
 uint32_t bit_reverse32(uint32_t x) {
@@ -1399,7 +1382,7 @@ uint32_t bit_reverse32(uint32_t x) {
 }
 uint64_t bit_reverse64(uint64_t x) {
         return ((uint64_t)bit_reverse32((uint32_t)x) << 32) |
-                (uint64_t)bit_reverse32((uint32_t)(x >> 32));
+               (uint64_t)bit_reverse32((uint32_t)(x >> 32));
 }
 
 /* ---- Overflow arithmetic ----------------------------------- */
@@ -1478,17 +1461,17 @@ Mat4 mat4_transpose(Mat4 m) {
 
 Mat4 mat4_translate(Vec3 t) {
         Mat4 m  = mat4_identity();
-        m.e[12] = t.e[0];
-        m.e[13] = t.e[1];
-        m.e[14] = t.e[2];
+        m.e[12] = t.x;
+        m.e[13] = t.y;
+        m.e[14] = t.z;
         return m;
 }
 
 Mat4 mat4_scale_v(Vec3 s) {
         Mat4 m  = mat4_identity();
-        m.e[0]  = s.e[0];
-        m.e[5]  = s.e[1];
-        m.e[10] = s.e[2];
+        m.e[0]  = s.x;
+        m.e[5]  = s.y;
+        m.e[10] = s.z;
         return m;
 }
 
@@ -1496,15 +1479,15 @@ Mat4 mat4_rotate(Vec3 axis, float angle) {
         Vec3  a = vec3_norm(axis);
         float s = sinf(angle), c = cosf(angle), t = 1.0f - c;
         Mat4  m = mat4_identity();
-        m.e[0]  = t * a.e[0] * a.e[0] + c;
-        m.e[1]  = t * a.e[0] * a.e[1] + s * a.e[2];
-        m.e[2]  = t * a.e[0] * a.e[2] - s * a.e[1];
-        m.e[4]  = t * a.e[0] * a.e[1] - s * a.e[2];
-        m.e[5]  = t * a.e[1] * a.e[1] + c;
-        m.e[6]  = t * a.e[1] * a.e[2] + s * a.e[0];
-        m.e[8]  = t * a.e[0] * a.e[2] + s * a.e[1];
-        m.e[9]  = t * a.e[1] * a.e[2] - s * a.e[0];
-        m.e[10] = t * a.e[2] * a.e[2] + c;
+        m.e[0]  = t * a.x * a.x + c;
+        m.e[1]  = t * a.x * a.y + s * a.z;
+        m.e[2]  = t * a.x * a.z - s * a.y;
+        m.e[4]  = t * a.x * a.y - s * a.z;
+        m.e[5]  = t * a.y * a.y + c;
+        m.e[6]  = t * a.y * a.z + s * a.x;
+        m.e[8]  = t * a.x * a.z + s * a.y;
+        m.e[9]  = t * a.y * a.z - s * a.x;
+        m.e[10] = t * a.z * a.z + c;
         return m;
 }
 
@@ -1524,15 +1507,15 @@ Mat4 mat4_look_at(Vec3 eye, Vec3 center, Vec3 up) {
         Vec3 s  = vec3_norm(vec3_cross(f, up));
         Vec3 u  = vec3_cross(s, f);
         Mat4 m  = mat4_identity();
-        m.e[0]  = s.e[0];
-        m.e[4]  = s.e[1];
-        m.e[8]  = s.e[2];
-        m.e[1]  = u.e[0];
-        m.e[5]  = u.e[1];
-        m.e[9]  = u.e[2];
-        m.e[2]  = -f.e[0];
-        m.e[6]  = -f.e[1];
-        m.e[10] = -f.e[2];
+        m.e[0]  = s.x;
+        m.e[4]  = s.y;
+        m.e[8]  = s.z;
+        m.e[1]  = u.x;
+        m.e[5]  = u.y;
+        m.e[9]  = u.z;
+        m.e[2]  = -f.x;
+        m.e[6]  = -f.y;
+        m.e[10] = -f.z;
         m.e[12] = -vec3_dot(s, eye);
         m.e[13] = -vec3_dot(u, eye);
         m.e[14] = vec3_dot(f, eye);
@@ -1545,53 +1528,53 @@ Mat4 mat4_inverse(Mat4 m) {
         float  inv[16], det;
         int    i;
         inv[0]  = a[5] * a[10] * a[15] - a[5] * a[11] * a[14] -
-                a[9] * a[6] * a[15] + a[9] * a[7] * a[14] +
-                a[13] * a[6] * a[11] - a[13] * a[7] * a[10];
+                  a[9] * a[6] * a[15] + a[9] * a[7] * a[14] +
+                  a[13] * a[6] * a[11] - a[13] * a[7] * a[10];
         inv[4]  = -a[4] * a[10] * a[15] + a[4] * a[11] * a[14] +
-                a[8] * a[6] * a[15] - a[8] * a[7] * a[14] -
-                a[12] * a[6] * a[11] + a[12] * a[7] * a[10];
+                  a[8] * a[6] * a[15] - a[8] * a[7] * a[14] -
+                  a[12] * a[6] * a[11] + a[12] * a[7] * a[10];
         inv[8]  = a[4] * a[9] * a[15] - a[4] * a[11] * a[13] -
-                a[8] * a[5] * a[15] + a[8] * a[7] * a[13] +
-                a[12] * a[5] * a[11] - a[12] * a[7] * a[9];
+                  a[8] * a[5] * a[15] + a[8] * a[7] * a[13] +
+                  a[12] * a[5] * a[11] - a[12] * a[7] * a[9];
         inv[12] = -a[4] * a[9] * a[14] + a[4] * a[10] * a[13] +
-                a[8] * a[5] * a[14] - a[8] * a[6] * a[13] -
-                a[12] * a[5] * a[10] + a[12] * a[6] * a[9];
+                  a[8] * a[5] * a[14] - a[8] * a[6] * a[13] -
+                  a[12] * a[5] * a[10] + a[12] * a[6] * a[9];
         inv[1]  = -a[1] * a[10] * a[15] + a[1] * a[11] * a[14] +
-                a[9] * a[2] * a[15] - a[9] * a[3] * a[14] -
-                a[13] * a[2] * a[11] + a[13] * a[3] * a[10];
+                  a[9] * a[2] * a[15] - a[9] * a[3] * a[14] -
+                  a[13] * a[2] * a[11] + a[13] * a[3] * a[10];
         inv[5]  = a[0] * a[10] * a[15] - a[0] * a[11] * a[14] -
-                a[8] * a[2] * a[15] + a[8] * a[3] * a[14] +
-                a[12] * a[2] * a[11] - a[12] * a[3] * a[10];
+                  a[8] * a[2] * a[15] + a[8] * a[3] * a[14] +
+                  a[12] * a[2] * a[11] - a[12] * a[3] * a[10];
         inv[9]  = -a[0] * a[9] * a[15] + a[0] * a[11] * a[13] +
-                a[8] * a[1] * a[15] - a[8] * a[3] * a[13] -
-                a[12] * a[1] * a[11] + a[12] * a[3] * a[9];
+                  a[8] * a[1] * a[15] - a[8] * a[3] * a[13] -
+                  a[12] * a[1] * a[11] + a[12] * a[3] * a[9];
         inv[13] = a[0] * a[9] * a[14] - a[0] * a[10] * a[13] -
-                a[8] * a[1] * a[14] + a[8] * a[2] * a[13] +
-                a[12] * a[1] * a[10] - a[12] * a[2] * a[9];
+                  a[8] * a[1] * a[14] + a[8] * a[2] * a[13] +
+                  a[12] * a[1] * a[10] - a[12] * a[2] * a[9];
         inv[2]  = a[1] * a[6] * a[15] - a[1] * a[7] * a[14] -
-                a[5] * a[2] * a[15] + a[5] * a[3] * a[14] +
-                a[13] * a[2] * a[7] - a[13] * a[3] * a[6];
+                  a[5] * a[2] * a[15] + a[5] * a[3] * a[14] +
+                  a[13] * a[2] * a[7] - a[13] * a[3] * a[6];
         inv[6]  = -a[0] * a[6] * a[15] + a[0] * a[7] * a[14] +
-                a[4] * a[2] * a[15] - a[4] * a[3] * a[14] -
-                a[12] * a[2] * a[7] + a[12] * a[3] * a[6];
+                  a[4] * a[2] * a[15] - a[4] * a[3] * a[14] -
+                  a[12] * a[2] * a[7] + a[12] * a[3] * a[6];
         inv[10] = a[0] * a[5] * a[15] - a[0] * a[7] * a[13] -
-                a[4] * a[1] * a[15] + a[4] * a[3] * a[13] +
-                a[12] * a[1] * a[7] - a[12] * a[3] * a[5];
+                  a[4] * a[1] * a[15] + a[4] * a[3] * a[13] +
+                  a[12] * a[1] * a[7] - a[12] * a[3] * a[5];
         inv[14] = -a[0] * a[5] * a[14] + a[0] * a[6] * a[13] +
-                a[4] * a[1] * a[14] - a[4] * a[2] * a[13] -
-                a[12] * a[1] * a[6] + a[12] * a[2] * a[5];
+                  a[4] * a[1] * a[14] - a[4] * a[2] * a[13] -
+                  a[12] * a[1] * a[6] + a[12] * a[2] * a[5];
         inv[3]  = -a[1] * a[6] * a[11] + a[1] * a[7] * a[10] +
-                a[5] * a[2] * a[11] - a[5] * a[3] * a[10] -
-                a[9] * a[2] * a[7] + a[9] * a[3] * a[6];
+                  a[5] * a[2] * a[11] - a[5] * a[3] * a[10] -
+                  a[9] * a[2] * a[7] + a[9] * a[3] * a[6];
         inv[7]  = a[0] * a[6] * a[11] - a[0] * a[7] * a[10] -
-                a[4] * a[2] * a[11] + a[4] * a[3] * a[10] +
-                a[8] * a[2] * a[7] - a[8] * a[3] * a[6];
+                  a[4] * a[2] * a[11] + a[4] * a[3] * a[10] +
+                  a[8] * a[2] * a[7] - a[8] * a[3] * a[6];
         inv[11] = -a[0] * a[5] * a[11] + a[0] * a[7] * a[9] +
-                a[4] * a[1] * a[11] - a[4] * a[3] * a[9] -
-                a[8] * a[1] * a[7] + a[8] * a[3] * a[5];
+                  a[4] * a[1] * a[11] - a[4] * a[3] * a[9] -
+                  a[8] * a[1] * a[7] + a[8] * a[3] * a[5];
         inv[15] = a[0] * a[5] * a[10] - a[0] * a[6] * a[9] -
-                a[4] * a[1] * a[10] + a[4] * a[2] * a[9] +
-                a[8] * a[1] * a[6] - a[8] * a[2] * a[5];
+                  a[4] * a[1] * a[10] + a[4] * a[2] * a[9] +
+                  a[8] * a[1] * a[6] - a[8] * a[2] * a[5];
         det = a[0] * inv[0] + a[1] * inv[4] + a[2] * inv[8] + a[3] * inv[12];
         if (det == 0.0f) return mat4_identity();
         det = 1.0f / det;
@@ -1604,26 +1587,26 @@ Mat4 mat4_inverse(Mat4 m) {
 
 #                define _SIP_ROTL(x, n) (((x) << (n)) | ((x) >> (64 - (n))))
 #                define _SIP_ROUND(v0, v1, v2, v3) \
-        v0 += v1;                  \
-        v1 = _SIP_ROTL(v1, 13);    \
-        v1 ^= v0;                  \
-        v0 = _SIP_ROTL(v0, 32);    \
-        v2 += v3;                  \
-        v3 = _SIP_ROTL(v3, 16);    \
-        v3 ^= v2;                  \
-        v0 += v3;                  \
-        v3 = _SIP_ROTL(v3, 21);    \
-        v3 ^= v0;                  \
-        v2 += v1;                  \
-        v1 = _SIP_ROTL(v1, 17);    \
-        v1 ^= v2;                  \
-        v2 = _SIP_ROTL(v2, 32)
+                        v0 += v1;                  \
+                        v1 = _SIP_ROTL(v1, 13);    \
+                        v1 ^= v0;                  \
+                        v0 = _SIP_ROTL(v0, 32);    \
+                        v2 += v3;                  \
+                        v3 = _SIP_ROTL(v3, 16);    \
+                        v3 ^= v2;                  \
+                        v0 += v3;                  \
+                        v3 = _SIP_ROTL(v3, 21);    \
+                        v3 ^= v0;                  \
+                        v2 += v1;                  \
+                        v1 = _SIP_ROTL(v1, 17);    \
+                        v1 ^= v2;                  \
+                        v2 = _SIP_ROTL(v2, 32)
 
 static uint64_t _sip_u64le(const uint8_t* p) {
         return (uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16) |
-                ((uint64_t)p[3] << 24) | ((uint64_t)p[4] << 32) |
-                ((uint64_t)p[5] << 40) | ((uint64_t)p[6] << 48) |
-                ((uint64_t)p[7] << 56);
+               ((uint64_t)p[3] << 24) | ((uint64_t)p[4] << 32) |
+               ((uint64_t)p[5] << 40) | ((uint64_t)p[6] << 48) |
+               ((uint64_t)p[7] << 56);
 }
 
 uint64_t siphash13(const void* data, size_t len, const uint8_t key[16]) {
@@ -1703,7 +1686,7 @@ uint32_t xxhash32(const void* data, size_t len, uint32_t seed) {
                         p += 4;
                 } while (p <= lim);
                 h = bit_rol32(v1, 1) + bit_rol32(v2, 7) + bit_rol32(v3, 12) +
-                        bit_rol32(v4, 18);
+                    bit_rol32(v4, 18);
         } else {
                 h = seed + _XX32_P5;
         }
@@ -1767,7 +1750,7 @@ uint64_t xxhash64(const void* data, size_t len, uint64_t seed) {
                         p += 8;
                 } while (p <= lim);
                 h = bit_rol64(v1, 1) + bit_rol64(v2, 7) + bit_rol64(v3, 12) +
-                        bit_rol64(v4, 18);
+                    bit_rol64(v4, 18);
                 h = _xx64_mrg(h, v1);
                 h = _xx64_mrg(h, v2);
                 h = _xx64_mrg(h, v3);
@@ -1778,13 +1761,13 @@ uint64_t xxhash64(const void* data, size_t len, uint64_t seed) {
         h += (uint64_t)len;
         while (p + 8 <= end) {
                 h = bit_rol64(h ^ _xx64_rnd(0, _xx64_r64(p)), 27) * _XX64_P1 +
-                        _XX64_P4;
+                    _XX64_P4;
                 p += 8;
         }
         if (p + 4 <= end) {
                 h = bit_rol64(h ^ ((uint64_t)_xx64_r32(p) * _XX64_P1), 23) *
                         _XX64_P2 +
-                        _XX64_P3;
+                    _XX64_P3;
                 p += 4;
         }
         while (p < end) {

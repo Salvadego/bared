@@ -38,6 +38,7 @@
 #define BARESTD_H
 
 #include <assert.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -309,6 +310,35 @@ Str str_consume_until(Str* s, int (*pred)(int));
 char* str_to_cstr(Arena* a, Str s);
 Str   str_clone(Arena* a, Str s);
 
+/* Arena-backed printf. Result is stable for the lifetime of a.
+   No intermediate heap allocation -- sizes with vsnprintf then fills. */
+Str str_fmt(Arena* a, const char* fmt, ...);
+
+/* ----------------------------------------------------------------
+ *  str_from -- parse numeric values out of a Str without needing
+ *  a NUL-terminated copy.
+ *
+ *  Consuming variants advance *s past the parsed token on success.
+ *  Non-consuming variants parse the whole Str and return true/false.
+ *  On failure the output is unchanged and *s is not advanced.
+ *
+ *  Integers accept optional leading +/- and an optional 0x/0X prefix
+ *  for hex.  Floats accept the formats strtod recognises.
+ *  str_from_bool accepts "true"/"false" (case-insensitive) and "1"/"0".
+ * ---------------------------------------------------------------- */
+
+/* Consuming -- advances *s past whitespace then the number token. */
+bool str_consume_i64(Str* s, int64_t* out);
+bool str_consume_u64(Str* s, uint64_t* out);
+bool str_consume_f64(Str* s, double* out);
+bool str_consume_bool(Str* s, bool* out);
+
+/* Non-consuming -- parses entire string (ignoring leading/trailing space). */
+bool str_to_i64(Str s, int64_t* out);
+bool str_to_u64(Str s, uint64_t* out);
+bool str_to_f64(Str s, double* out);
+bool str_to_bool(Str s, bool* out);
+
 /* ================================================================
  *  4 - MAP  (Robin Hood open-addressing, shadow header)
  * ================================================================
@@ -419,6 +449,7 @@ void  _map_set(Map** mp, const void* key, const void* val);
 bool  _map_del(Map* m, const void* key);
 bool  map_next(Map* m, MapIter* it);
 void* _map_keys(Map* m, Arena* a, size_t key_sz);
+void* _map_values(Map* m, Arena* a, size_t val_sz, size_t val_align);
 
 uint64_t map_hash_str(const void* key, size_t sz);
 bool     map_eq_str(const void* a, const void* b, size_t sz);
@@ -449,6 +480,8 @@ Map* map_clone(Map* m, Arena* a);
 #define map_set(m, keyptr, valptr) _map_set(&(m), (keyptr), (valptr))
 #define map_del(m, keyptr)         _map_del((m), (keyptr))
 #define map_keys(m, a, KT)         ((KT*)_map_keys((m), (a), sizeof(KT)))
+#define map_values(m, a, VT) \
+        ((VT*)_map_values((m), (a), sizeof(VT), AlignOfType(VT)))
 
 /* ================================================================
  *  IMPLEMENTATION
@@ -641,6 +674,211 @@ Str str_clone(Arena* a, Str s) {
         char* buf = arena_push_array(a, char, s.len ? s.len : 1);
         memcpy(buf, s.ptr, s.len);
         return str_buf(buf, s.len);
+}
+
+Str str_fmt(Arena* a, const char* fmt, ...) {
+        va_list ap, ap2;
+        va_start(ap, fmt);
+        va_copy(ap2, ap);
+        int n = vsnprintf(NULL, 0, fmt, ap);
+        va_end(ap);
+        if (n < 0) {
+                va_end(ap2);
+                return str_null();
+        }
+        char* buf = arena_push_array(a, char, (size_t)n + 1);
+        vsnprintf(buf, (size_t)n + 1, fmt, ap2);
+        va_end(ap2);
+        return str_buf(buf, (size_t)n);
+}
+
+/* ---- str_from helpers --------------------------------------- */
+
+static size_t _str_ws_len(Str s) {
+        size_t n = 0;
+        while (n < s.len && (unsigned char)s.ptr[n] <= ' ') n++;
+        return n;
+}
+
+bool str_consume_i64(Str* s, int64_t* out) {
+        size_t ws = _str_ws_len(*s);
+        Str    r  = str_buf(s->ptr + ws, s->len - ws);
+        if (!r.len) return false;
+
+        size_t  i    = 0;
+        int     neg  = 0;
+        int64_t val  = 0;
+        int     base = 10;
+
+        if (r.ptr[i] == '-') {
+                neg = 1;
+                i++;
+        } else if (r.ptr[i] == '+') {
+                i++;
+        }
+
+        if (i + 1 < r.len && r.ptr[i] == '0' &&
+            (r.ptr[i + 1] == 'x' || r.ptr[i + 1] == 'X')) {
+                base = 16;
+                i += 2;
+        }
+
+        size_t start = i;
+        while (i < r.len) {
+                char c = r.ptr[i];
+                int  d;
+                if (c >= '0' && c <= '9')
+                        d = c - '0';
+                else if (base == 16 && c >= 'a' && c <= 'f')
+                        d = c - 'a' + 10;
+                else if (base == 16 && c >= 'A' && c <= 'F')
+                        d = c - 'A' + 10;
+                else
+                        break;
+                val = val * base + d;
+                i++;
+        }
+        if (i == start) return false;
+        *out           = neg ? -val : val;
+        size_t advance = ws + i;
+        s->ptr += advance;
+        s->len -= advance;
+        return true;
+}
+
+bool str_consume_u64(Str* s, uint64_t* out) {
+        size_t ws = _str_ws_len(*s);
+        Str    r  = str_buf(s->ptr + ws, s->len - ws);
+        if (!r.len) return false;
+
+        size_t   i    = 0;
+        uint64_t val  = 0;
+        int      base = 10;
+
+        if (r.ptr[i] == '+') i++;
+        if (i + 1 < r.len && r.ptr[i] == '0' &&
+            (r.ptr[i + 1] == 'x' || r.ptr[i + 1] == 'X')) {
+                base = 16;
+                i += 2;
+        }
+
+        size_t start = i;
+        while (i < r.len) {
+                char c = r.ptr[i];
+                int  d;
+                if (c >= '0' && c <= '9')
+                        d = c - '0';
+                else if (base == 16 && c >= 'a' && c <= 'f')
+                        d = c - 'a' + 10;
+                else if (base == 16 && c >= 'A' && c <= 'F')
+                        d = c - 'A' + 10;
+                else
+                        break;
+                val = val * (uint64_t)base + (uint64_t)d;
+                i++;
+        }
+        if (i == start) return false;
+        *out           = val;
+        size_t advance = ws + i;
+        s->ptr += advance;
+        s->len -= advance;
+        return true;
+}
+
+bool str_consume_f64(Str* s, double* out) {
+        size_t ws = _str_ws_len(*s);
+        Str    r  = str_buf(s->ptr + ws, s->len - ws);
+        if (!r.len) return false;
+
+        /* strtod needs a NUL-terminated string.
+           Scan forward to find the end of the float token first so we
+           can bound the copy, then NUL-terminate a stack buffer. */
+        size_t n = 0;
+        while (n < r.len) {
+                char c = r.ptr[n];
+                if ((c >= '0' && c <= '9') || c == '.' || c == '-' ||
+                    c == '+' || c == 'e' || c == 'E' || c == 'n' || c == 'N' ||
+                    c == 'a' || c == 'A' || c == 'f' || c == 'F' || c == 'i' ||
+                    c == 'I')
+                        n++;
+                else
+                        break;
+        }
+        if (n == 0) return false;
+
+        /* copy into a stack buffer so strtod has a NUL-terminated string */
+        char  tmp[64];
+        char* buf;
+        char* heap = NULL;
+        if (n < sizeof(tmp)) {
+                memcpy(tmp, r.ptr, n);
+                tmp[n] = '\0';
+                buf    = tmp;
+        } else {
+                heap = (char*)malloc(n + 1);
+                if (!heap) return false;
+                memcpy(heap, r.ptr, n);
+                heap[n] = '\0';
+                buf     = heap;
+        }
+
+        char*  end;
+        double val      = strtod(buf, &end);
+        size_t consumed = (size_t)(end - buf);
+        if (heap) free(heap);
+        if (consumed == 0) return false;
+
+        *out           = val;
+        size_t advance = ws + consumed;
+        s->ptr += advance;
+        s->len -= advance;
+        return true;
+}
+
+bool str_consume_bool(Str* s, bool* out) {
+        size_t ws      = _str_ws_len(*s);
+        Str    r       = str_buf(s->ptr + ws, s->len - ws);
+        size_t advance = 0;
+
+        if (r.len >= 4 && (r.ptr[0] == 't' || r.ptr[0] == 'T') &&
+            (r.ptr[1] == 'r' || r.ptr[1] == 'R') &&
+            (r.ptr[2] == 'u' || r.ptr[2] == 'U') &&
+            (r.ptr[3] == 'e' || r.ptr[3] == 'E')) {
+                *out    = true;
+                advance = 4;
+        } else if (r.len >= 5 && (r.ptr[0] == 'f' || r.ptr[0] == 'F') &&
+                   (r.ptr[1] == 'a' || r.ptr[1] == 'A') &&
+                   (r.ptr[2] == 'l' || r.ptr[2] == 'L') &&
+                   (r.ptr[3] == 's' || r.ptr[3] == 'S') &&
+                   (r.ptr[4] == 'e' || r.ptr[4] == 'E')) {
+                *out    = false;
+                advance = 5;
+        } else if (r.len >= 1 && r.ptr[0] == '1') {
+                *out    = true;
+                advance = 1;
+        } else if (r.len >= 1 && r.ptr[0] == '0') {
+                *out    = false;
+                advance = 1;
+        } else {
+                return false;
+        }
+
+        s->ptr += ws + advance;
+        s->len -= ws + advance;
+        return true;
+}
+
+bool str_to_i64(Str s, int64_t* out) {
+        return str_consume_i64(&s, out);
+}
+bool str_to_u64(Str s, uint64_t* out) {
+        return str_consume_u64(&s, out);
+}
+bool str_to_f64(Str s, double* out) {
+        return str_consume_f64(&s, out);
+}
+bool str_to_bool(Str s, bool* out) {
+        return str_consume_bool(&s, out);
 }
 
 Str str_consume_while(Str* s, int (*pred)(int)) {
@@ -914,6 +1152,21 @@ void* _map_keys(Map* m, Arena* a, size_t key_sz) {
                 if (bh->hash != 0) keys = _slice_push_raw(keys, _bkt_key(b));
         }
         return keys;
+}
+
+void* _map_values(Map* m, Arena* a, size_t val_sz, size_t val_align) {
+        MapHdr* hdr  = map_hdr(m);
+        void*   vals = _slice_make(
+            a, val_sz, val_align ? val_align : 8, hdr->len ? hdr->len : 1);
+        size_t i;
+        for (i = 0; i < hdr->cap; i++) {
+                uint8_t*   b  = _map_bkt(m, i);
+                BucketHdr* bh = (BucketHdr*)b;
+                if (bh->hash != 0)
+                        vals = _slice_push_raw(
+                            vals, _bkt_val(b, hdr->key_sz, hdr->val_align));
+        }
+        return vals;
 }
 
 uint64_t map_hash_str(const void* key, size_t sz) {

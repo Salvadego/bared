@@ -3,14 +3,14 @@
  * ============================================
  *
  *  USAGE
- *    #define STRINGS_IMPLEMENTATION
- *    #include "strings.h"
+ *    #define BARESTRS_IMPLEMENTATION
+ *    #include "barestrs.h"
  *
  *  DEPENDS ON
  *    barestd.h  (Str, Arena, Slice, Scratch)
  *
  *  OPTIONAL
- *    utf8.h - include before strings.h to unlock rune-aware functions:
+ *    bareutf8.h - include before strings.h to unlock rune-aware functions:
  *               str_contains_rune(), str_index_rune(),
  *               str_map_rune(), str_to_valid_utf8()
  *
@@ -28,8 +28,8 @@
  *    // cut.before="user"  cut.after="host"  cut.found=true
  */
 
-#ifndef STRINGS_H
-#define STRINGS_H
+#ifndef BARESTRS_H
+#define BARESTRS_H
 
 #include <ctype.h>
 
@@ -101,7 +101,7 @@ Str str_to_lower(Arena* a, Str s);
 Str str_title(Arena* a, Str s); /* ASCII: capitalise each word */
 
 /* ================================================================
- *  UTF-8 aware - requires utf8.h included first
+ *  UTF-8 aware - requires bareutf8.h included first
  * ================================================================ */
 #ifdef UTF8_H
 bool      str_contains_rune(Str s, Rune r);
@@ -113,7 +113,7 @@ Str       str_to_valid_utf8(Arena* a, Str s, Str replacement);
 /* ================================================================
  *  IMPLEMENTATION
  * ================================================================ */
-#ifdef STRINGS_IMPLEMENTATION
+#ifdef BARESTRS_IMPLEMENTATION
 
 #        include <string.h>
 
@@ -574,5 +574,5 @@ Str str_to_valid_utf8(Arena* a, Str s, Str replacement) {
 }
 
 #        endif /* UTF8_H */
-#endif         /* STRINGS_IMPLEMENTATION */
-#endif         /* STRINGS_H */
+#endif         /* BARESTRS_IMPLEMENTATION */
+#endif         /* BARESTRS_H */

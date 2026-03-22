@@ -3,14 +3,14 @@
  * =========================================
  *
  *  USAGE
- *    #define IO_IMPLEMENTATION
+ *    #define BAREIO_IMPLEMENTATION
  *    #include "io.h"
  *
  *  DEPENDS ON
  *    barestd.h  (Arena, Str)
  *
  *  OPTIONAL DEPENDENCY
- *    os.h   - if included before io.h, file-backed Reader/Writer
+ *    bareos.h   - if included before io.h, file-backed Reader/Writer
  *             and convenience functions are unlocked:
  *               reader_from_osfile()
  *               writer_from_osfile()
@@ -19,11 +19,11 @@
  *
  *  INCLUDE ORDER
  *    // File IO available:
- *    #include "os.h"
- *    #include "io.h"
+ *    #include "bareos.h"
+ *    #include "bareio.h"
  *
  *    // Memory/buffer IO only:
- *    #include "io.h"
+ *    #include "bareio.h"
  *
  *  DESIGN
  *    Reader and Writer are thin vtable structs {ctx, fn, close_fn}.
@@ -50,8 +50,8 @@
  *    // Str data = io_read_file(arena, str_lit("data.txt"));
  */
 
-#ifndef IO_H
-#define IO_H
+#ifndef BAREIO_H
+#define BAREIO_H
 
 #include <stdio.h>
 
@@ -130,7 +130,7 @@ BufWriter* bufwriter_make(Arena* a, Writer dst, size_t buf_cap);
  *  Constructors - available when os.h is included first
  * ================================================================ */
 
-#ifdef OS_H
+#ifdef BAREOS_H
 /* Reader/Writer over an open File (caller manages os_open/os_close). */
 Reader reader_from_osfile(File* f);
 Writer writer_from_osfile(File* f);
@@ -138,7 +138,7 @@ Writer writer_from_osfile(File* f);
 /* Convenience: open -> read_all -> close / open -> write -> close. */
 Str  io_read_file(Arena* a, Str path);
 void io_write_file(Str path, Str data);
-#endif /* OS_H */
+#endif /* BAREOS_H */
 
 /* ================================================================
  *  Raw vtable dispatch
@@ -175,7 +175,7 @@ void io_eprintln(Str s);
 /* ================================================================
  *  IMPLEMENTATION
  * ================================================================ */
-#ifdef IO_IMPLEMENTATION
+#ifdef BAREIO_IMPLEMENTATION
 
 /* ----------------------------------------------------------------
  *  FILE* backend
@@ -278,7 +278,7 @@ Str mem_writer_result(MemWriter* mw) {
  *  OS file backend - only compiled when os.h was included
  * ---------------------------------------------------------------- */
 
-#        ifdef OS_H
+#        ifdef BAREOS_H
 
 static size_t _osfile_read_fn(void* ctx, void* buf, size_t n) {
 #                if defined(_WIN32) || defined(_WIN64)
@@ -332,7 +332,7 @@ void io_write_file(Str path, Str data) {
         assert(ok && "io_write_file: failed");
 }
 
-#        endif /* OS_H */
+#        endif /* BAREOS_H */
 
 /* ----------------------------------------------------------------
  *  Buffered reader
@@ -472,17 +472,14 @@ void io_close_writer(Writer* w) {
 }
 
 Str io_read_all(Arena* a, Reader* r) {
-        char*   start = NULL;
-        size_t  total = 0;
+        /* Use Slice(char) so all data lands in one contiguous allocation
+           regardless of arena chunk boundaries. */
+        Slice(char) buf = slice_make(a, char, KB(4));
         uint8_t tmp[KB(4)];
-        size_t  got;
-        while ((got = r->read_fn(r->ctx, tmp, sizeof tmp)) > 0) {
-                char* chunk = (char*)arena_push(a, got, 1);
-                if (!start) start = chunk;
-                memcpy(chunk, tmp, got);
-                total += got;
-        }
-        return start ? str_buf(start, total) : str_buf("", 0);
+        size_t  got, i;
+        while ((got = r->read_fn(r->ctx, tmp, sizeof tmp)) > 0)
+                for (i = 0; i < got; i++) slice_push(buf, char, (char)tmp[i]);
+        return str_buf(buf, slice_len(buf));
 }
 
 /* ----------------------------------------------------------------
@@ -504,5 +501,5 @@ void io_eprintln(Str s) {
         fputc('\n', stderr);
 }
 
-#endif /* IO_IMPLEMENTATION */
-#endif /* IO_H */
+#endif /* BAREIO_IMPLEMENTATION */
+#endif /* BAREIO_H */

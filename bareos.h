@@ -3,8 +3,8 @@
  * ==================================================
  *
  *  USAGE
- *    #define OS_IMPLEMENTATION
- *    #include "os.h"
+ *    #define BAREOS_IMPLEMENTATION
+ *    #include "bareos.h"
  *
  *  DEPENDS ON
  *    barestd.h  (Arena, Str, Slice)
@@ -35,8 +35,8 @@
  *        printf(StrFmt "\n", StrArgs(entries[i].name));
  */
 
-#ifndef OS_H
-#define OS_H
+#ifndef BAREOS_H
+#define BAREOS_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -176,13 +176,13 @@ Str os_getcwd(Arena* a);
 
 /* Returns arena-owned Slice(Str) of paths matching pattern.
    Pattern follows shell glob rules: * ? [abc]
-   Requires _POSIX_C_SOURCE >= 200809L (already set by os.h). */
+   Requires _POSIX_C_SOURCE >= 200809L (already set by bareos.h). */
 Slice(Str) os_glob(Arena* a, Str pattern);
 
 /* ================================================================
  *  IMPLEMENTATION
  * ================================================================ */
-#ifdef OS_IMPLEMENTATION
+#ifdef BAREOS_IMPLEMENTATION
 
 #        include <stdio.h>
 #        include <stdlib.h>
@@ -824,5 +824,5 @@ Slice(Str) os_glob(Arena* a, Str pattern) {
         return result;
 }
 
-#endif /* OS_IMPLEMENTATION */
-#endif /* OS_H */
+#endif /* BAREOS_IMPLEMENTATION */
+#endif /* BAREOS_H */

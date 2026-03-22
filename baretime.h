@@ -1,16 +1,13 @@
 /*
- * btime.h - Monotonic Instant, calendar DateTime, Duration
+ * baretime.h - Monotonic Instant, calendar DateTime, Duration
  * ==========================================================
  *
  *  USAGE
- *    #define BTIME_IMPLEMENTATION
- *    #include "btime.h"
+ *    #define BARETIME_IMPLEMENTATION
+ *    #include "baretime.h"
  *
  *  DEPENDS ON
  *    barestd.h  (Arena, Str)
- *
- *  NAMING
- *    Named "btime" to avoid shadowing the C stdlib <time.h>.
  *
  *  DESIGN
  *    Instant  - opaque monotonic timestamp. Only meaningful as a
@@ -31,10 +28,10 @@
  *    Fallback (C99 only)   - clock()  (CPU time, not wall)
  *
  *  NOTE
- *    Include btime.h before any header that pulls in <stdlib.h>
+ *    Include baretime.h before any header that pulls in <stdlib.h>
  *    so that _POSIX_C_SOURCE is set before glibc locks features.
  *    Easiest pattern: define all _IMPLEMENTATION macros first,
- *    then include btime.h as your first include.
+ *    then include baretime.h as your first include.
  *
  *  EXAMPLE
  *
@@ -67,8 +64,8 @@
 #        endif
 #endif
 
-#ifndef BTIME_H
-#        define BTIME_H
+#ifndef BARETIME_H
+#        define BARETIME_H
 
 #        include <stdint.h>
 
@@ -167,7 +164,7 @@ Str datetime_fmt_time(Arena* a, DateTime dt);
 /* ================================================================
  *  IMPLEMENTATION
  * ================================================================ */
-#        ifdef BTIME_IMPLEMENTATION
+#        ifdef BARETIME_IMPLEMENTATION
 
 #                include <stdio.h>
 #                include <string.h>
@@ -478,5 +475,5 @@ Str datetime_fmt_time(Arena* a, DateTime dt) {
         return str_buf(out, (size_t)n);
 }
 
-#        endif /* BTIME_IMPLEMENTATION */
-#endif         /* BTIME_H */
+#        endif /* BARETIME_IMPLEMENTATION */
+#endif         /* BARETIME_H */
