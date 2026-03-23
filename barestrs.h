@@ -75,10 +75,16 @@ Str str_trim_suffix(Str s, Str suffix);
  *  str_cut:        split on first sep; before/after are views
  *  str_cut_prefix: strip leading prefix -> after is remainder
  *  str_cut_suffix: strip trailing suffix -> before is remainder
+ *  str_cut_byte:   split on single char
+ *  str_cut_func:   split on first char where pred(c) is true
+ *  str_cut_any:    split on any char in set
  * ================================================================ */
 StrCut str_cut(Str s, Str sep);
 StrCut str_cut_prefix(Str s, Str prefix);
 StrCut str_cut_suffix(Str s, Str suffix);
+StrCut str_cut_byte(Str s, char c);
+StrCut str_cut_func(Str s, int (*pred)(int));
+StrCut str_cut_any(Str s, Str chars);
 
 /* ================================================================
  *  Split - returns Slice(Str); elements are views into s
@@ -212,7 +218,7 @@ bool str_equal_fold(Str a, Str b) {
         size_t i;
         for (i = 0; i < a.len; i++)
                 if (tolower((unsigned char)a.ptr[i]) !=
-                    tolower((unsigned char)b.ptr[i]))
+                                tolower((unsigned char)b.ptr[i]))
                         return false;
         return true;
 }
@@ -297,6 +303,30 @@ StrCut str_cut_suffix(Str s, Str suffix) {
                 c.found  = false;
         }
         return c;
+}
+
+StrCut str_cut_byte(Str s, char c) {
+        ptrdiff_t i = str_index_byte(s, c);
+        if (i < 0) return (StrCut){s, str_null(), false};
+        return (StrCut){str_slice(s, 0, (size_t)i),
+                str_slice(s, (size_t)i + 1, s.len),
+                true};
+}
+
+StrCut str_cut_any(Str s, Str chars) {
+        ptrdiff_t i = str_index_any(s, chars);
+        if (i < 0) return (StrCut){s, str_null(), false};
+        return (StrCut){str_slice(s, 0, (size_t)i),
+                str_slice(s, (size_t)i + 1, s.len),
+                true};
+}
+
+StrCut str_cut_func(Str s, int (*pred)(int)) {
+        ptrdiff_t i = str_index_func(s, pred);
+        if (i < 0) return (StrCut){s, str_null(), false};
+        return (StrCut){str_slice(s, 0, (size_t)i),
+                str_slice(s, (size_t)i + 1, s.len),
+                true};
 }
 
 /* ---- Split ---------------------------------------------------- */
@@ -550,7 +580,7 @@ Str str_to_valid_utf8(Arena* a, Str s, Str replacement) {
                 int  n = utf8_decode(p, (size_t)(end - p), &r);
                 if (n <= 0) break;
                 total += (r.cp == RUNE_ERROR && n == 1) ? replacement.len
-                                                        : (size_t)n;
+                        : (size_t)n;
                 p += n;
         }
         /* Pass 2 */ char* buf = arena_push_array(a, char, total + 1);
