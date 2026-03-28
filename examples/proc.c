@@ -29,8 +29,7 @@ int main(void) {
         printf("stdout    = \"%s\"\n", trimmed(r.out.ptr));
 
         /* stderr from a command that writes to it */
-        ProcResult r2 =
-                proc_run_capture(a, str_lit("echo out"));
+        ProcResult r2 = proc_run_capture(a, str_lit("echo out"));
         printf("stdout = \"%s\"\n", trimmed(r2.out.ptr));
         printf("stderr = \"%s\"\n", trimmed(r2.err.ptr));
 
@@ -41,7 +40,7 @@ int main(void) {
         /* --- 4. proc_spawn_str + proc_wait --- */
         ProcPipe pipes    = {0};
         pipes.want_stdout = true;
-        Proc p = proc_spawn_str(a, str_lit("echo spawned"), &pipes);
+        Proc p            = proc_spawn_str(a, str_lit("echo spawned"), &pipes);
         char buf[64];
         memset(buf, 0, sizeof buf);
         proc_read(&pipes, buf, sizeof buf - 1);

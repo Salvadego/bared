@@ -50,482 +50,568 @@
  *    net_close(s);
  */
 
-#ifndef BARENET_H
-#define BARENET_H
-
-/* _GNU_SOURCE must be defined before any system header. */
 #if !defined(_GNU_SOURCE) && (defined(__linux__) || defined(__GLIBC__))
-#  define _GNU_SOURCE
+#        define _GNU_SOURCE
 #endif
+#ifndef BARENET_H
+#        define BARENET_H
+#        include <stdint.h>
 
-#include "barestd.h"
-#include <stdint.h>
+#        include "barestd.h"
+#        if defined(_WIN32) || defined(_WIN64)
+#                define _BN_WIN
+#                ifndef WIN32_LEAN_AND_MEAN
+#                        define WIN32_LEAN_AND_MEAN
+#                endif
+#                include <winsock2.h>
+#                include <ws2tcpip.h>
+typedef SOCKET _BnFd;
+#                define SOCK_INVALID_FD INVALID_SOCKET
+#        else
+#                define _BN_POSIX
+#                include <arpa/inet.h>
+#                include <errno.h>
+#                include <fcntl.h>
+#                include <netdb.h>
+#                include <netinet/in.h>
+#                include <netinet/tcp.h>
+#                include <sys/socket.h>
+#                include <sys/time.h>
+#                include <sys/types.h>
+#                include <unistd.h>
+typedef int _BnFd;
+#                define SOCK_INVALID_FD (-1)
+#        endif
 
-/* ================================================================
- *  Platform setup
- * ================================================================ */
-
-#if defined(_WIN32) || defined(_WIN64)
-#  define _BN_WIN
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
-   typedef SOCKET _BnFd;
-#  define SOCK_INVALID_FD INVALID_SOCKET
-#else
-#  define _BN_POSIX
-#  include <sys/types.h>
-#  include <sys/socket.h>
-#  include <sys/time.h>
-#  include <netinet/in.h>
-#  include <netinet/tcp.h>
-#  include <arpa/inet.h>
-#  include <netdb.h>
-#  include <unistd.h>
-#  include <fcntl.h>
-#  include <errno.h>
-   typedef int _BnFd;
-#  define SOCK_INVALID_FD (-1)
-#endif
-
-/* ================================================================
- *  Types
- * ================================================================ */
-
-typedef struct { _BnFd _fd; } Sock;
-#define SOCK_INVALID ((Sock){SOCK_INVALID_FD})
-
-static inline bool sock_valid(Sock s) { return s._fd != SOCK_INVALID_FD; }
-
-/* Compact address: IPv4 or IPv6 + port, no OS types exposed. */
 typedef struct {
-    uint8_t  _sa[28]; /* enough for sockaddr_in6 (28 B) */
-    int      _len;
+        _BnFd _fd;
+} Sock;
+#        define SOCK_INVALID ((Sock){SOCK_INVALID_FD})
+static inline bool sock_valid(Sock s) {
+        return s._fd != SOCK_INVALID_FD;
+}
+
+typedef struct {
+        uint8_t _sa[28];
+        int     _len;
 } NetAddr;
-
-/* Addr family */
 typedef enum { NET_IPV4 = 4, NET_IPV6 = 6 } NetFamily;
+#        define NETADDR_STR_MAX 64
 
-/* ================================================================
- *  Lifecycle
- * ================================================================ */
-
-/* Call once before using any net functions (no-op on POSIX). */
-void net_init   (void);
-/* Call once at shutdown (no-op on POSIX). */
+void net_init(void);
 void net_cleanup(void);
+bool net_resolve(
+    Arena* a, Str host, uint16_t port, NetFamily family, NetAddr* out);
+Str      net_addr_str(const NetAddr* addr, char buf[NETADDR_STR_MAX]);
+uint16_t net_addr_port(const NetAddr* addr);
+Sock     net_tcp_connect(Arena* a, Str host, uint16_t port);
+Sock     net_tcp_listen(Str host, uint16_t port, int backlog);
+Sock     net_accept(Sock srv, NetAddr* peer);
+bool     net_send(Sock s, const void* buf, size_t n);
+int      net_recv(Sock s, void* buf, size_t n);
+bool     net_send_msg(Sock s, const void* data, uint32_t len);
+Str      net_recv_msg(Arena* a, Sock s);
+Sock     net_udp_bind(Str host, uint16_t port);
+Sock     net_udp_socket(NetFamily family);
+int      net_sendto(Sock s, const void* buf, size_t n, NetAddr dst);
+int      net_recvfrom(Sock s, void* buf, size_t cap, NetAddr* src);
+void     net_set_nonblocking(Sock s, bool on);
+void     net_set_nodelay(Sock s, bool on);
+void     net_set_reuseaddr(Sock s, bool on);
+void     net_set_reuseport(Sock s, bool on);
+void     net_set_keepalive(Sock s, bool on);
+void     net_set_recvtimeo(Sock s, int ms);
+void     net_set_sendtimeo(Sock s, int ms);
+void     net_close(Sock s);
+Str      net_last_err(void);
 
 /* ================================================================
- *  Address helpers -- no allocation on fast path
- *
- *  addr_buf is a caller-supplied char[NETADDR_STR_MAX] for the string.
- *  NETADDR_STR_MAX == 46 covers "ffff:ffff:...:ffff%scope" + port.
+ *  Multiplexing helpers
  * ================================================================ */
 
-#define NETADDR_STR_MAX 64
+/* Event flags for net_poll */
+#        define NET_POLL_IN  0x01 /* ready to read  */
+#        define NET_POLL_OUT 0x02 /* ready to write */
+#        define NET_POLL_ERR 0x04 /* error          */
+#        define NET_POLL_HUP 0x08 /* hang up        */
+
+typedef struct {
+        Sock sock;
+        int  events;  /* requested: NET_POLL_IN | NET_POLL_OUT */
+        int  revents; /* returned:  what actually fired         */
+} NetPollFd;
 
 /*
- * Parse "host:port" or "host" + explicit port into a NetAddr.
- * Resolves DNS. Returns true on success.
- * Scratch used internally for getaddrinfo results -- freed before return.
+ * Poll up to nfds sockets for events.
+ * timeout_ms: -1 = block forever, 0 = non-blocking, >0 = ms to wait.
+ * Returns number of fds with events, 0 on timeout, -1 on error.
  */
-bool    net_resolve(Arena *a, Str host, uint16_t port,
-                    NetFamily family, NetAddr *out);
+int net_poll(NetPollFd* fds, int nfds, int timeout_ms);
 
-/* Format addr:port into buf (must be NETADDR_STR_MAX bytes).
-   Returns a Str pointing into buf -- no allocation. */
-Str     net_addr_str(const NetAddr *addr, char buf[NETADDR_STR_MAX]);
-
-uint16_t net_addr_port(const NetAddr *addr);
-
-/* ================================================================
- *  TCP
- * ================================================================ */
-
-/* Connect to host:port (blocking). Returns SOCK_INVALID on failure. */
-Sock net_tcp_connect(Arena *a, Str host, uint16_t port);
-
-/* Create a listening socket bound to host:port with backlog. */
-Sock net_tcp_listen(Str host, uint16_t port, int backlog);
-
-/* Accept the next incoming connection. Blocks. peer may be NULL. */
-Sock net_accept(Sock srv, NetAddr *peer);
-
-/* Send exactly n bytes; retries on EINTR. Returns false on error. */
-bool net_send(Sock s, const void *buf, size_t n);
-/* Receive up to n bytes. Returns bytes read, 0 on EOF, -1 on error. */
-int  net_recv(Sock s, void *buf, size_t n);
-
-/* Send / receive a framed message: 4-byte little-endian length prefix.
-   net_send_msg allocates nothing.
-   net_recv_msg allocates into arena (uses scratch internally for read
-   then copies the final message -- one arena alloc for the result). */
-bool net_send_msg(Sock s, const void *data, uint32_t len);
-Str  net_recv_msg(Arena *a, Sock s); /* str_null on error/close */
+/*
+ * Simple single-socket readiness check.
+ * Returns true if the socket is ready for the given event within timeout_ms.
+ */
+bool net_wait_readable(Sock s, int timeout_ms);
+bool net_wait_writable(Sock s, int timeout_ms);
 
 /* ================================================================
- *  UDP
+ *  Connection pool (backed by barepool.h if available, else malloc)
  * ================================================================ */
+typedef struct {
+        Sock*    socks; /* array of pooled connections */
+        bool*    in_use;
+        int      cap;
+        Str      host;
+        uint16_t port;
+        Arena*   arena;
+} ConnPool;
 
-/* Bind a UDP socket to host:port. */
-Sock net_udp_bind(Str host, uint16_t port);
+ConnPool* conn_pool_new(Arena* a, Str host, uint16_t port, int cap);
+Sock      conn_pool_get(ConnPool* p); /* borrow; SOCK_INVALID if all busy */
+void      conn_pool_put(ConnPool* p, Sock s); /* return to pool */
+void      conn_pool_close_all(ConnPool* p);
 
-/* Create an unbound UDP socket. */
-Sock net_udp_socket(NetFamily family);
+#        ifdef BARENET_IMPLEMENTATION
+#                include <stdio.h>
+#                include <string.h>
 
-int  net_sendto  (Sock s, const void *buf, size_t n, NetAddr dst);
-int  net_recvfrom(Sock s, void *buf, size_t cap, NetAddr *src);
-
-/* ================================================================
- *  Socket options
- * ================================================================ */
-
-void net_set_nonblocking(Sock s, bool on);
-void net_set_nodelay    (Sock s, bool on);   /* TCP_NODELAY      */
-void net_set_reuseaddr  (Sock s, bool on);   /* SO_REUSEADDR     */
-void net_set_reuseport  (Sock s, bool on);   /* SO_REUSEPORT     */
-void net_set_keepalive  (Sock s, bool on);   /* SO_KEEPALIVE     */
-void net_set_recvtimeo  (Sock s, int ms);    /* SO_RCVTIMEO      */
-void net_set_sendtimeo  (Sock s, int ms);    /* SO_SNDTIMEO      */
-
-void net_close(Sock s);
-
-/* Last error as a Str (uses a static 128-byte buffer, not arena). */
-Str  net_last_err(void);
-
-/* ================================================================
- *  IMPLEMENTATION
- * ================================================================ */
-#ifdef BARENET_IMPLEMENTATION
-
-#include <string.h>
-#include <stdio.h>
-
-/* Static error buffer -- 128 B, never more needed. */
 static char _bn_errbuf[128];
-
-Str net_last_err(void) {
-#ifdef _BN_WIN
-    int   e = WSAGetLastError();
-    int   n = snprintf(_bn_errbuf, sizeof _bn_errbuf, "WSA error %d", e);
-#else
-    int   n = snprintf(_bn_errbuf, sizeof _bn_errbuf, "%s", strerror(errno));
-#endif
-    return str_buf(_bn_errbuf, (size_t)(n > 0 ? n : 0));
+Str         net_last_err(void) {
+#                ifdef _BN_WIN
+        int e = WSAGetLastError();
+        int n = snprintf(_bn_errbuf, sizeof _bn_errbuf, "WSA error %d", e);
+#                else
+        int n = snprintf(_bn_errbuf, sizeof _bn_errbuf, "%s", strerror(errno));
+#                endif
+        return str_buf(_bn_errbuf, (size_t)(n > 0 ? n : 0));
 }
-
-/* ---- Init / cleanup ------------------------------------------ */
-
 void net_init(void) {
-#ifdef _BN_WIN
-    WSADATA wd;
-    WSAStartup(MAKEWORD(2,2), &wd);
-#endif
+#                ifdef _BN_WIN
+        WSADATA wd;
+        WSAStartup(MAKEWORD(2, 2), &wd);
+#                endif
 }
 void net_cleanup(void) {
-#ifdef _BN_WIN
-    WSACleanup();
-#endif
+#                ifdef _BN_WIN
+        WSACleanup();
+#                endif
 }
-
-/* ---- Address helpers ----------------------------------------- */
-
-bool net_resolve(Arena *a, Str host, uint16_t port,
-                 NetFamily family, NetAddr *out)
-{
-    /* Stack buffer for host string -- avoids arena cost for short names.
-       Hostnames > 253 chars are invalid per DNS spec. */
-    char hostbuf[256];
-    char portbuf[8];
-    size_t hl = host.len < 255 ? host.len : 255;
-    memcpy(hostbuf, host.ptr, hl);
-    hostbuf[hl] = '\0';
-    snprintf(portbuf, sizeof portbuf, "%u", (unsigned)port);
-
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof hints);
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_family   = (family == NET_IPV6) ? AF_INET6 : AF_INET;
-
-    /* getaddrinfo allocates from libc heap -- we free immediately. */
-    if (getaddrinfo(hostbuf, portbuf, &hints, &res) != 0 || !res) {
-        Unused(a);
-        return false;
-    }
-    size_t slen = (size_t)res->ai_addrlen;
-    if (slen > sizeof out->_sa) slen = sizeof out->_sa;
-    memcpy(out->_sa, res->ai_addr, slen);
-    out->_len = (int)slen;
-    freeaddrinfo(res);
-    return true;
-}
-
-Str net_addr_str(const NetAddr *addr, char buf[NETADDR_STR_MAX]) {
-    const struct sockaddr *sa = (const struct sockaddr *)addr->_sa;
-    char ip[48] = {0};
-    uint16_t port = 0;
-    if (sa->sa_family == AF_INET) {
-        const struct sockaddr_in *s4 = (const struct sockaddr_in *)sa;
-        inet_ntop(AF_INET, &s4->sin_addr, ip, sizeof ip);
-        port = ntohs(s4->sin_port);
-    } else {
-        const struct sockaddr_in6 *s6 = (const struct sockaddr_in6 *)sa;
-        inet_ntop(AF_INET6, &s6->sin6_addr, ip, sizeof ip);
-        port = ntohs(s6->sin6_port);
-    }
-    int n = snprintf(buf, NETADDR_STR_MAX, "%s:%u", ip, (unsigned)port);
-    return str_buf(buf, (size_t)(n > 0 ? n : 0));
-}
-
-uint16_t net_addr_port(const NetAddr *addr) {
-    const struct sockaddr *sa = (const struct sockaddr *)addr->_sa;
-    if (sa->sa_family == AF_INET)
-        return ntohs(((const struct sockaddr_in *)sa)->sin_port);
-    return ntohs(((const struct sockaddr_in6 *)sa)->sin6_port);
-}
-
-/* ---- Internal: bind to host:port string ---------------------- */
-
-static Sock _bn_bind_str(Str host, uint16_t port, int type) {
-    char hostbuf[256];
-    char portbuf[8];
-    size_t hl = host.len < 255 ? host.len : 255;
-    memcpy(hostbuf, host.ptr, hl);
-    hostbuf[hl] = '\0';
-    snprintf(portbuf, sizeof portbuf, "%u", (unsigned)port);
-
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family   = AF_UNSPEC;
-    hints.ai_socktype = type;
-    hints.ai_flags    = AI_PASSIVE;
-    if (getaddrinfo(hostbuf, portbuf, &hints, &res) != 0 || !res)
-        return SOCK_INVALID;
-
-    _BnFd fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd == SOCK_INVALID_FD) { freeaddrinfo(res); return SOCK_INVALID; }
-
-#ifdef _BN_POSIX
-    { int one = 1; setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one); }
-#else
-    { char one = 1; setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one); }
-#endif
-
-    if (bind(fd, res->ai_addr, (socklen_t)res->ai_addrlen) != 0) {
+bool net_resolve(
+    Arena* a, Str host, uint16_t port, NetFamily family, NetAddr* out) {
+        char   hostbuf[256], portbuf[8];
+        size_t hl = host.len < 255 ? host.len : 255;
+        memcpy(hostbuf, host.ptr, hl);
+        hostbuf[hl] = '\0';
+        snprintf(portbuf, sizeof portbuf, "%u", (unsigned)port);
+        struct addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_family   = (family == NET_IPV6) ? AF_INET6 : AF_INET;
+        if (getaddrinfo(hostbuf, portbuf, &hints, &res) != 0 || !res) {
+                Unused(a);
+                return false;
+        }
+        size_t slen = (size_t)res->ai_addrlen;
+        if (slen > sizeof out->_sa) slen = sizeof out->_sa;
+        memcpy(out->_sa, res->ai_addr, slen);
+        out->_len = (int)slen;
         freeaddrinfo(res);
-#ifdef _BN_WIN
-        closesocket(fd);
-#else
-        close(fd);
-#endif
-        return SOCK_INVALID;
-    }
-    freeaddrinfo(res);
-    return (Sock){fd};
+        return true;
 }
-
-/* ---- TCP ----------------------------------------------------- */
-
-Sock net_tcp_connect(Arena *a, Str host, uint16_t port) {
-    NetAddr addr;
-    if (!net_resolve(a, host, port, NET_IPV4, &addr)) {
-        /* Try IPv6 if v4 fails */
-        if (!net_resolve(a, host, port, NET_IPV6, &addr)) return SOCK_INVALID;
-    }
-    const struct sockaddr *sa = (const struct sockaddr *)addr._sa;
-    _BnFd fd = socket(sa->sa_family, SOCK_STREAM, 0);
-    if (fd == SOCK_INVALID_FD) return SOCK_INVALID;
-    if (connect(fd, sa, (socklen_t)addr._len) != 0) {
-#ifdef _BN_WIN
-        closesocket(fd);
-#else
-        close(fd);
-#endif
-        return SOCK_INVALID;
-    }
-    return (Sock){fd};
+Str net_addr_str(const NetAddr* addr, char buf[NETADDR_STR_MAX]) {
+        const struct sockaddr* sa     = (const struct sockaddr*)addr->_sa;
+        char                   ip[48] = {0};
+        uint16_t               port   = 0;
+        if (sa->sa_family == AF_INET) {
+                const struct sockaddr_in* s4 = (const struct sockaddr_in*)sa;
+                inet_ntop(AF_INET, &s4->sin_addr, ip, sizeof ip);
+                port = ntohs(s4->sin_port);
+        } else {
+                const struct sockaddr_in6* s6 = (const struct sockaddr_in6*)sa;
+                inet_ntop(AF_INET6, &s6->sin6_addr, ip, sizeof ip);
+                port = ntohs(s6->sin6_port);
+        }
+        int n = snprintf(buf, NETADDR_STR_MAX, "%s:%u", ip, (unsigned)port);
+        return str_buf(buf, (size_t)(n > 0 ? n : 0));
 }
-
+uint16_t net_addr_port(const NetAddr* addr) {
+        const struct sockaddr* sa = (const struct sockaddr*)addr->_sa;
+        if (sa->sa_family == AF_INET)
+                return ntohs(((const struct sockaddr_in*)sa)->sin_port);
+        return ntohs(((const struct sockaddr_in6*)sa)->sin6_port);
+}
+static Sock _bn_bind_str(Str host, uint16_t port, int type) {
+        char   hostbuf[256], portbuf[8];
+        size_t hl = host.len < 255 ? host.len : 255;
+        memcpy(hostbuf, host.ptr, hl);
+        hostbuf[hl] = '\0';
+        snprintf(portbuf, sizeof portbuf, "%u", (unsigned)port);
+        struct addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family   = AF_UNSPEC;
+        hints.ai_socktype = type;
+        hints.ai_flags    = AI_PASSIVE;
+        if (getaddrinfo(hostbuf, portbuf, &hints, &res) != 0 || !res)
+                return SOCK_INVALID;
+        _BnFd fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (fd == SOCK_INVALID_FD) {
+                freeaddrinfo(res);
+                return SOCK_INVALID;
+        }
+#                ifdef _BN_POSIX
+        {
+                int one = 1;
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        }
+#                else
+        {
+                char one = 1;
+                setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        }
+#                endif
+        if (bind(fd, res->ai_addr, (socklen_t)res->ai_addrlen) != 0) {
+                freeaddrinfo(res);
+#                ifdef _BN_WIN
+                closesocket(fd);
+#                else
+                close(fd);
+#                endif
+                return SOCK_INVALID;
+        }
+        freeaddrinfo(res);
+        return (Sock){fd};
+}
+Sock net_tcp_connect(Arena* a, Str host, uint16_t port) {
+        NetAddr addr;
+        if (!net_resolve(a, host, port, NET_IPV4, &addr))
+                if (!net_resolve(a, host, port, NET_IPV6, &addr))
+                        return SOCK_INVALID;
+        const struct sockaddr* sa = (const struct sockaddr*)addr._sa;
+        _BnFd                  fd = socket(sa->sa_family, SOCK_STREAM, 0);
+        if (fd == SOCK_INVALID_FD) return SOCK_INVALID;
+        if (connect(fd, sa, (socklen_t)addr._len) != 0) {
+#                ifdef _BN_WIN
+                closesocket(fd);
+#                else
+                close(fd);
+#                endif
+                return SOCK_INVALID;
+        }
+        return (Sock){fd};
+}
 Sock net_tcp_listen(Str host, uint16_t port, int backlog) {
-    Sock s = _bn_bind_str(host, port, SOCK_STREAM);
-    if (!sock_valid(s)) return SOCK_INVALID;
-    if (listen(s._fd, backlog) != 0) { net_close(s); return SOCK_INVALID; }
-    return s;
+        Sock s = _bn_bind_str(host, port, SOCK_STREAM);
+        if (!sock_valid(s)) return SOCK_INVALID;
+        if (listen(s._fd, backlog) != 0) {
+                net_close(s);
+                return SOCK_INVALID;
+        }
+        return s;
 }
-
-Sock net_accept(Sock srv, NetAddr *peer) {
-    struct sockaddr_storage ss;
-    socklen_t len = sizeof ss;
-    _BnFd fd = accept(srv._fd, (struct sockaddr *)&ss, &len);
-    if (fd == SOCK_INVALID_FD) return SOCK_INVALID;
-    if (peer) {
-        size_t cp = len < sizeof peer->_sa ? len : sizeof peer->_sa;
-        memcpy(peer->_sa, &ss, cp);
-        peer->_len = (int)len;
-    }
-    return (Sock){fd};
+Sock net_accept(Sock srv, NetAddr* peer) {
+        struct sockaddr_storage ss;
+        socklen_t               len = sizeof ss;
+        _BnFd                   fd;
+        do {
+                fd = accept(srv._fd, (struct sockaddr*)&ss, &len);
+        } while (fd == SOCK_INVALID_FD && errno == EINTR);
+        if (fd == SOCK_INVALID_FD) return SOCK_INVALID;
+        if (peer) {
+                size_t cp = len < sizeof peer->_sa ? len : sizeof peer->_sa;
+                memcpy(peer->_sa, &ss, cp);
+                peer->_len = (int)len;
+        }
+        /* Disable Nagle so small responses aren't held waiting for more data */
+        {
+                int t = 1;
+                setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (void*)&t, sizeof t);
+        }
+        return (Sock){fd};
 }
-
-bool net_send(Sock s, const void *buf, size_t n) {
-    const char *p = (const char *)buf;
-    while (n > 0) {
-#ifdef _BN_WIN
-        int sent = send(s._fd, p, (int)n, 0);
-        if (sent <= 0) return false;
-#else
-        ssize_t sent;
-        do { sent = send(s._fd, p, n, MSG_NOSIGNAL); }
-        while (sent < 0 && errno == EINTR);
-        if (sent <= 0) return false;
-#endif
-        p += sent; n -= (size_t)sent;
-    }
-    return true;
+bool net_send(Sock s, const void* buf, size_t n) {
+        const char* p = (const char*)buf;
+        while (n > 0) {
+#                ifdef _BN_WIN
+                int sent = send(s._fd, p, (int)n, 0);
+                if (sent <= 0) return false;
+#                else
+                ssize_t sent;
+                do {
+                        sent = send(s._fd, p, n, MSG_NOSIGNAL);
+                } while (sent < 0 && errno == EINTR);
+                if (sent <= 0) return false;
+#                endif
+                p += sent;
+                n -= (size_t)sent;
+        }
+        return true;
 }
-
-int net_recv(Sock s, void *buf, size_t n) {
-#ifdef _BN_WIN
-    int r = recv(s._fd, (char *)buf, (int)n, 0);
-    return (int)r;
-#else
-    ssize_t r;
-    do { r = recv(s._fd, buf, n, 0); } while (r < 0 && errno == EINTR);
-    return (int)r;
-#endif
+int net_recv(Sock s, void* buf, size_t n) {
+#                ifdef _BN_WIN
+        return (int)recv(s._fd, (char*)buf, (int)n, 0);
+#                else
+        ssize_t r;
+        do {
+                r = recv(s._fd, buf, n, 0);
+        } while (r < 0 && errno == EINTR);
+        return (int)r;
+#                endif
 }
-
-bool net_send_msg(Sock s, const void *data, uint32_t len) {
-    /* 4-byte LE length header, no allocation */
-    uint8_t hdr[4];
-    hdr[0] = (uint8_t)(len);
-    hdr[1] = (uint8_t)(len >> 8);
-    hdr[2] = (uint8_t)(len >> 16);
-    hdr[3] = (uint8_t)(len >> 24);
-    return net_send(s, hdr, 4) && net_send(s, data, len);
+bool net_send_msg(Sock s, const void* data, uint32_t len) {
+        uint8_t hdr[4];
+        hdr[0] = (uint8_t)len;
+        hdr[1] = (uint8_t)(len >> 8);
+        hdr[2] = (uint8_t)(len >> 16);
+        hdr[3] = (uint8_t)(len >> 24);
+        return net_send(s, hdr, 4) && net_send(s, data, len);
 }
-
-Str net_recv_msg(Arena *a, Sock s) {
-    uint8_t hdr[4];
-    /* Read exactly 4 bytes for the header */
-    size_t got = 0;
-    while (got < 4) {
-        int r = net_recv(s, hdr + got, 4 - got);
-        if (r <= 0) return str_null();
-        got += (size_t)r;
-    }
-    uint32_t len = (uint32_t)hdr[0]       | ((uint32_t)hdr[1] << 8) |
-                   ((uint32_t)hdr[2] << 16)| ((uint32_t)hdr[3] << 24);
-    if (len == 0) return str_buf("", 0);
-
-    /* Read body directly into arena -- one allocation, no copy. */
-    char *buf = arena_push_array(a, char, len);
-    got = 0;
-    while (got < len) {
-        int r = net_recv(s, buf + got, len - got);
-        if (r <= 0) return str_null();
-        got += (size_t)r;
-    }
-    return str_buf(buf, len);
+Str net_recv_msg(Arena* a, Sock s) {
+        uint8_t hdr[4];
+        size_t  got = 0;
+        while (got < 4) {
+                int r = net_recv(s, hdr + got, 4 - got);
+                if (r <= 0) return str_null();
+                got += (size_t)r;
+        }
+        uint32_t len = (uint32_t)hdr[0] | ((uint32_t)hdr[1] << 8) |
+                       ((uint32_t)hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
+        if (len == 0) return str_buf("", 0);
+        char* buf = arena_push_array(a, char, len);
+        got       = 0;
+        while (got < len) {
+                int r = net_recv(s, buf + got, len - got);
+                if (r <= 0) return str_null();
+                got += (size_t)r;
+        }
+        return str_buf(buf, len);
 }
-
-/* ---- UDP ----------------------------------------------------- */
-
 Sock net_udp_bind(Str host, uint16_t port) {
-    return _bn_bind_str(host, port, SOCK_DGRAM);
+        return _bn_bind_str(host, port, SOCK_DGRAM);
 }
-
 Sock net_udp_socket(NetFamily family) {
-    int af = (family == NET_IPV6) ? AF_INET6 : AF_INET;
-    _BnFd fd = socket(af, SOCK_DGRAM, 0);
-    return (fd == SOCK_INVALID_FD) ? SOCK_INVALID : (Sock){fd};
+        int   af = (family == NET_IPV6) ? AF_INET6 : AF_INET;
+        _BnFd fd = socket(af, SOCK_DGRAM, 0);
+        return (fd == SOCK_INVALID_FD) ? SOCK_INVALID : (Sock){fd};
 }
-
-int net_sendto(Sock s, const void *buf, size_t n, NetAddr dst) {
-#ifdef _BN_WIN
-    return (int)sendto(s._fd, (const char *)buf, (int)n, 0,
-                       (const struct sockaddr *)dst._sa, (socklen_t)dst._len);
-#else
-    return (int)sendto(s._fd, buf, n, 0,
-                       (const struct sockaddr *)dst._sa, (socklen_t)dst._len);
-#endif
+int net_sendto(Sock s, const void* buf, size_t n, NetAddr dst) {
+#                ifdef _BN_WIN
+        return (int)sendto(s._fd,
+                           (const char*)buf,
+                           (int)n,
+                           0,
+                           (const struct sockaddr*)dst._sa,
+                           (socklen_t)dst._len);
+#                else
+        return (int)sendto(s._fd,
+                           buf,
+                           n,
+                           0,
+                           (const struct sockaddr*)dst._sa,
+                           (socklen_t)dst._len);
+#                endif
 }
-
-int net_recvfrom(Sock s, void *buf, size_t cap, NetAddr *src) {
-    struct sockaddr_storage ss;
-    socklen_t len = sizeof ss;
-#ifdef _BN_WIN
-    int r = (int)recvfrom(s._fd, (char *)buf, (int)cap, 0,
-                          (struct sockaddr *)&ss, &len);
-#else
-    int r = (int)recvfrom(s._fd, buf, cap, 0,
-                          (struct sockaddr *)&ss, &len);
-#endif
-    if (r > 0 && src) {
-        size_t cp = (size_t)len < sizeof src->_sa ? (size_t)len : sizeof src->_sa;
-        memcpy(src->_sa, &ss, cp);
-        src->_len = (int)len;
-    }
-    return r;
+int net_recvfrom(Sock s, void* buf, size_t cap, NetAddr* src) {
+        struct sockaddr_storage ss;
+        socklen_t               len = sizeof ss;
+#                ifdef _BN_WIN
+        int r = (int)recvfrom(
+            s._fd, (char*)buf, (int)cap, 0, (struct sockaddr*)&ss, &len);
+#                else
+        int r = (int)recvfrom(s._fd, buf, cap, 0, (struct sockaddr*)&ss, &len);
+#                endif
+        if (r > 0 && src) {
+                size_t cp = (size_t)len < sizeof src->_sa ? (size_t)len
+                                                          : sizeof src->_sa;
+                memcpy(src->_sa, &ss, cp);
+                src->_len = (int)len;
+        }
+        return r;
 }
-
-/* ---- Socket options ------------------------------------------ */
-
 static void _bn_setsock(Sock s, int level, int opt, int val) {
-#ifdef _BN_WIN
-    setsockopt(s._fd, level, opt, (const char *)&val, sizeof val);
-#else
-    setsockopt(s._fd, level, opt, &val, sizeof val);
-#endif
+#                ifdef _BN_WIN
+        setsockopt(s._fd, level, opt, (const char*)&val, sizeof val);
+#                else
+        setsockopt(s._fd, level, opt, &val, sizeof val);
+#                endif
 }
-
 static void _bn_timeo(Sock s, int opt, int ms) {
-#ifdef _BN_WIN
-    DWORD t = (DWORD)ms;
-    setsockopt(s._fd, SOL_SOCKET, opt, (const char *)&t, sizeof t);
-#else
-    struct timeval tv;
-    tv.tv_sec  = ms / 1000;
-    tv.tv_usec = (ms % 1000) * 1000;
-    setsockopt(s._fd, SOL_SOCKET, opt, &tv, sizeof tv);
-#endif
+#                ifdef _BN_WIN
+        DWORD t = (DWORD)ms;
+        setsockopt(s._fd, SOL_SOCKET, opt, (const char*)&t, sizeof t);
+#                else
+        struct timeval tv;
+        tv.tv_sec  = ms / 1000;
+        tv.tv_usec = (ms % 1000) * 1000;
+        setsockopt(s._fd, SOL_SOCKET, opt, &tv, sizeof tv);
+#                endif
 }
-
-void net_set_nodelay  (Sock s, bool on) { _bn_setsock(s, IPPROTO_TCP, TCP_NODELAY,   on?1:0); }
-void net_set_reuseaddr(Sock s, bool on) { _bn_setsock(s, SOL_SOCKET,  SO_REUSEADDR,  on?1:0); }
-void net_set_keepalive(Sock s, bool on) { _bn_setsock(s, SOL_SOCKET,  SO_KEEPALIVE,  on?1:0); }
-void net_set_recvtimeo(Sock s, int ms)  { _bn_timeo(s, SO_RCVTIMEO, ms); }
-void net_set_sendtimeo(Sock s, int ms)  { _bn_timeo(s, SO_SNDTIMEO, ms); }
-
+void net_set_nodelay(Sock s, bool on) {
+        _bn_setsock(s, IPPROTO_TCP, TCP_NODELAY, on ? 1 : 0);
+}
+void net_set_reuseaddr(Sock s, bool on) {
+        _bn_setsock(s, SOL_SOCKET, SO_REUSEADDR, on ? 1 : 0);
+}
+void net_set_keepalive(Sock s, bool on) {
+        _bn_setsock(s, SOL_SOCKET, SO_KEEPALIVE, on ? 1 : 0);
+}
+void net_set_recvtimeo(Sock s, int ms) {
+        _bn_timeo(s, SO_RCVTIMEO, ms);
+}
+void net_set_sendtimeo(Sock s, int ms) {
+        _bn_timeo(s, SO_SNDTIMEO, ms);
+}
 void net_set_reuseport(Sock s, bool on) {
-#ifdef SO_REUSEPORT
-    _bn_setsock(s, SOL_SOCKET, SO_REUSEPORT, on?1:0);
-#else
-    Unused(s); Unused(on);
-#endif
+#                ifdef SO_REUSEPORT
+        _bn_setsock(s, SOL_SOCKET, SO_REUSEPORT, on ? 1 : 0);
+#                else
+        Unused(s);
+        Unused(on);
+#                endif
 }
-
 void net_set_nonblocking(Sock s, bool on) {
-#ifdef _BN_WIN
-    u_long mode = on ? 1 : 0;
-    ioctlsocket(s._fd, FIONBIO, &mode);
-#else
-    int flags = fcntl(s._fd, F_GETFL, 0);
-    if (on) flags |=  O_NONBLOCK;
-    else    flags &= ~O_NONBLOCK;
-    fcntl(s._fd, F_SETFL, flags);
-#endif
+#                ifdef _BN_WIN
+        u_long mode = on ? 1 : 0;
+        ioctlsocket(s._fd, FIONBIO, &mode);
+#                else
+        int flags = fcntl(s._fd, F_GETFL, 0);
+        if (on)
+                flags |= O_NONBLOCK;
+        else
+                flags &= ~O_NONBLOCK;
+        fcntl(s._fd, F_SETFL, flags);
+#                endif
 }
-
 void net_close(Sock s) {
-    if (s._fd == SOCK_INVALID_FD) return;
-#ifdef _BN_WIN
-    closesocket(s._fd);
-#else
-    close(s._fd);
-#endif
+        if (s._fd == SOCK_INVALID_FD) return;
+#                ifdef _BN_WIN
+        closesocket(s._fd);
+#                else
+        close(s._fd);
+#                endif
 }
 
-#endif /* BARENET_IMPLEMENTATION */
-#endif /* BARENET_H */
+/* ---- net_poll ------------------------------------------ */
+#                if !defined(_WIN32) && !defined(_WIN64)
+#                        include <poll.h>
+#                endif
+
+int net_poll(NetPollFd* fds, int nfds, int timeout_ms) {
+#                ifdef _BN_WIN
+        /* Windows: WSAPoll */
+        WSAPOLLFD* wfds = (WSAPOLLFD*)malloc(sizeof(WSAPOLLFD) * (size_t)nfds);
+        if (!wfds) return -1;
+        int i;
+        for (i = 0; i < nfds; i++) {
+                wfds[i].fd     = fds[i].sock._fd;
+                wfds[i].events = 0;
+                if (fds[i].events & NET_POLL_IN) wfds[i].events |= POLLRDNORM;
+                if (fds[i].events & NET_POLL_OUT) wfds[i].events |= POLLWRNORM;
+        }
+        int r = WSAPoll(wfds, (ULONG)nfds, timeout_ms);
+        for (i = 0; i < nfds; i++) {
+                fds[i].revents = 0;
+                if (wfds[i].revents & POLLRDNORM) fds[i].revents |= NET_POLL_IN;
+                if (wfds[i].revents & POLLWRNORM)
+                        fds[i].revents |= NET_POLL_OUT;
+                if (wfds[i].revents & POLLERR) fds[i].revents |= NET_POLL_ERR;
+                if (wfds[i].revents & POLLHUP) fds[i].revents |= NET_POLL_HUP;
+        }
+        free(wfds);
+        return r;
+#                else
+        struct pollfd* pfds =
+            (struct pollfd*)malloc(sizeof(struct pollfd) * (size_t)nfds);
+        if (!pfds) return -1;
+        int i;
+        for (i = 0; i < nfds; i++) {
+                pfds[i].fd     = fds[i].sock._fd;
+                pfds[i].events = 0;
+                if (fds[i].events & NET_POLL_IN) pfds[i].events |= POLLIN;
+                if (fds[i].events & NET_POLL_OUT) pfds[i].events |= POLLOUT;
+        }
+        int r;
+        do {
+                r = poll(pfds, (nfds_t)nfds, timeout_ms);
+        } while (r < 0 && errno == EINTR);
+        for (i = 0; i < nfds; i++) {
+                fds[i].revents = 0;
+                if (pfds[i].revents & POLLIN) fds[i].revents |= NET_POLL_IN;
+                if (pfds[i].revents & POLLOUT) fds[i].revents |= NET_POLL_OUT;
+                if (pfds[i].revents & POLLERR) fds[i].revents |= NET_POLL_ERR;
+                if (pfds[i].revents & POLLHUP) fds[i].revents |= NET_POLL_HUP;
+        }
+        free(pfds);
+        return r;
+#                endif
+}
+
+bool net_wait_readable(Sock s, int timeout_ms) {
+        NetPollFd pfd;
+        pfd.sock    = s;
+        pfd.events  = NET_POLL_IN;
+        pfd.revents = 0;
+        int r       = net_poll(&pfd, 1, timeout_ms);
+        return r > 0 && (pfd.revents & NET_POLL_IN);
+}
+bool net_wait_writable(Sock s, int timeout_ms) {
+        NetPollFd pfd;
+        pfd.sock    = s;
+        pfd.events  = NET_POLL_OUT;
+        pfd.revents = 0;
+        int r       = net_poll(&pfd, 1, timeout_ms);
+        return r > 0 && (pfd.revents & NET_POLL_OUT);
+}
+
+/* ---- Connection pool ------------------------------------ */
+ConnPool* conn_pool_new(Arena* a, Str host, uint16_t port, int cap) {
+        ConnPool* p = arena_push_type(a, ConnPool);
+        p->socks    = arena_push_array(a, Sock, (size_t)cap);
+        p->in_use   = arena_push_array(a, bool, (size_t)cap);
+        p->cap      = cap;
+        p->host     = host;
+        p->port     = port;
+        p->arena    = a;
+        int i;
+        for (i = 0; i < cap; i++) {
+                p->socks[i]  = SOCK_INVALID;
+                p->in_use[i] = false;
+        }
+        return p;
+}
+Sock conn_pool_get(ConnPool* p) {
+        int i;
+        for (i = 0; i < p->cap; i++) {
+                if (p->in_use[i]) continue;
+                /* Lazy connect */
+                if (!sock_valid(p->socks[i]))
+                        p->socks[i] =
+                            net_tcp_connect(p->arena, p->host, p->port);
+                if (!sock_valid(p->socks[i])) continue;
+                p->in_use[i] = true;
+                return p->socks[i];
+        }
+        return SOCK_INVALID;
+}
+void conn_pool_put(ConnPool* p, Sock s) {
+        int i;
+        for (i = 0; i < p->cap; i++) {
+                if (p->socks[i]._fd == s._fd) {
+                        p->in_use[i] = false;
+                        return;
+                }
+        }
+}
+void conn_pool_close_all(ConnPool* p) {
+        int i;
+        for (i = 0; i < p->cap; i++) {
+                if (sock_valid(p->socks[i])) {
+                        net_close(p->socks[i]);
+                        p->socks[i] = SOCK_INVALID;
+                }
+                p->in_use[i] = false;
+        }
+}
+
+#        endif /* BARENET_IMPLEMENTATION */
+#endif         /* BARENET_H */

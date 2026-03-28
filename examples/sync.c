@@ -1,8 +1,8 @@
 #define BARESTD_IMPLEMENTATION
 #define BARESYNC_IMPLEMENTATION
-#include "baresync.h"
 #include <stdio.h>
 
+#include "baresync.h"
 
 static int g_counter = 0;
 

@@ -39,12 +39,11 @@
 #ifndef BAREOS_H
 #define BAREOS_H
 
-#include "baretime.h"
-
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "barestd.h"
+#include "baretime.h"
 
 /* ================================================================
  *  FileKind - covers all known Unix and Windows file types

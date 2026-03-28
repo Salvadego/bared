@@ -1,8 +1,9 @@
 #define BARESTD_IMPLEMENTATION
 #define BARESIG_IMPLEMENTATION
-#include "baresig.h"
 #include <signal.h>
 #include <stdio.h>
+
+#include "baresig.h"
 
 int main(void) {
         /* --- 1. sig_catch: install catching handler --- */

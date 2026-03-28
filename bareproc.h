@@ -53,7 +53,7 @@
 
 /* _GNU_SOURCE must be defined before any system header. */
 #if !defined(_GNU_SOURCE) && (defined(__linux__) || defined(__GLIBC__))
-#  define _GNU_SOURCE
+#        define _GNU_SOURCE
 #endif
 
 /* Feature test macros -- must appear before any system header. */
@@ -153,7 +153,7 @@ Proc proc_spawn_argv(Arena*      a,
  */
 Proc proc_spawn_str(Arena* a, Str cmd, ProcPipe* pipes);
 
-Proc proc_spawn_shell(Arena *a, Str cmd, ProcPipe *pipes);
+Proc proc_spawn_shell(Arena* a, Str cmd, ProcPipe* pipes);
 
 /*
  * Wait for proc to exit.  Returns the exit code (0 = success).
@@ -318,9 +318,9 @@ Proc proc_spawn_str(Arena* a, Str cmd, ProcPipe* pipes) {
         return p;
 }
 
-Proc proc_spawn_shell(Arena *a, Str cmd, ProcPipe *pipes) {
-    const char *argv[] = {"sh", "-c", str_to_cstr(a, cmd), NULL};
-    return proc_spawn_argv(a, argv, NULL, pipes);
+Proc proc_spawn_shell(Arena* a, Str cmd, ProcPipe* pipes) {
+        const char* argv[] = {"sh", "-c", str_to_cstr(a, cmd), NULL};
+        return proc_spawn_argv(a, argv, NULL, pipes);
 }
 
 int proc_wait(Proc p) {
