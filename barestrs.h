@@ -218,7 +218,7 @@ bool str_equal_fold(Str a, Str b) {
         size_t i;
         for (i = 0; i < a.len; i++)
                 if (tolower((unsigned char)a.ptr[i]) !=
-                                tolower((unsigned char)b.ptr[i]))
+                    tolower((unsigned char)b.ptr[i]))
                         return false;
         return true;
 }
@@ -309,24 +309,24 @@ StrCut str_cut_byte(Str s, char c) {
         ptrdiff_t i = str_index_byte(s, c);
         if (i < 0) return (StrCut){s, str_null(), false};
         return (StrCut){str_slice(s, 0, (size_t)i),
-                str_slice(s, (size_t)i + 1, s.len),
-                true};
+                        str_slice(s, (size_t)i + 1, s.len),
+                        true};
 }
 
 StrCut str_cut_any(Str s, Str chars) {
         ptrdiff_t i = str_index_any(s, chars);
         if (i < 0) return (StrCut){s, str_null(), false};
         return (StrCut){str_slice(s, 0, (size_t)i),
-                str_slice(s, (size_t)i + 1, s.len),
-                true};
+                        str_slice(s, (size_t)i + 1, s.len),
+                        true};
 }
 
 StrCut str_cut_func(Str s, int (*pred)(int)) {
         ptrdiff_t i = str_index_func(s, pred);
         if (i < 0) return (StrCut){s, str_null(), false};
         return (StrCut){str_slice(s, 0, (size_t)i),
-                str_slice(s, (size_t)i + 1, s.len),
-                true};
+                        str_slice(s, (size_t)i + 1, s.len),
+                        true};
 }
 
 /* ---- Split ---------------------------------------------------- */
@@ -580,7 +580,7 @@ Str str_to_valid_utf8(Arena* a, Str s, Str replacement) {
                 int  n = utf8_decode(p, (size_t)(end - p), &r);
                 if (n <= 0) break;
                 total += (r.cp == RUNE_ERROR && n == 1) ? replacement.len
-                        : (size_t)n;
+                                                        : (size_t)n;
                 p += n;
         }
         /* Pass 2 */ char* buf = arena_push_array(a, char, total + 1);

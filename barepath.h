@@ -94,15 +94,16 @@ Str path_rel(Arena* a, Str p, Str base);
    path_with_ext(a, "foo/bar.c", ".h") -> "foo/bar.h" */
 Str path_with_ext(Arena* a, Str p, Str new_ext);
 
-
 /* ================================================================
  *  IMPLEMENTATION
  * ================================================================ */
 #ifdef BAREPATH_IMPLEMENTATION
 
-#include <string.h>
+#        include <string.h>
 
-static int _path_is_sep(char c) { return c == '/' || c == '\\'; }
+static int _path_is_sep(char c) {
+        return c == '/' || c == '\\';
+}
 
 Str path_dir(Str p) {
         if (str_is_empty(p)) return str_lit(".");
@@ -145,7 +146,8 @@ bool path_is_abs(Str p) {
         if (str_is_empty(p)) return false;
         if (_path_is_sep(p.ptr[0])) return true;
         /* Windows: "C:\" or "C:/" */
-        if (p.len >= 3 && p.ptr[1] == ':' && _path_is_sep(p.ptr[2])) return true;
+        if (p.len >= 3 && p.ptr[1] == ':' && _path_is_sep(p.ptr[2]))
+                return true;
         return false;
 }
 
@@ -153,10 +155,13 @@ bool path_is_clean(Str p) {
         size_t i;
         for (i = 0; i < p.len; i++) {
                 if (p.ptr[i] == '\\') return false;
-                if (p.ptr[i] == '/' && i + 1 < p.len && p.ptr[i+1] == '/') return false;
-                if (p.ptr[i] == '.' && (i == 0 || p.ptr[i-1] == '/')) {
-                        if (i + 1 >= p.len || p.ptr[i+1] == '/') return false;
-                        if (p.ptr[i+1] == '.' && (i+2 >= p.len || p.ptr[i+2] == '/')) return false;
+                if (p.ptr[i] == '/' && i + 1 < p.len && p.ptr[i + 1] == '/')
+                        return false;
+                if (p.ptr[i] == '.' && (i == 0 || p.ptr[i - 1] == '/')) {
+                        if (i + 1 >= p.len || p.ptr[i + 1] == '/') return false;
+                        if (p.ptr[i + 1] == '.' &&
+                            (i + 2 >= p.len || p.ptr[i + 2] == '/'))
+                                return false;
                 }
         }
         return true;
@@ -165,8 +170,11 @@ bool path_is_clean(Str p) {
 Str path_join(Arena* a, Str left, Str right) {
         if (path_is_abs(right)) return str_clone(a, right);
         while (left.len > 0 && _path_is_sep(left.ptr[left.len - 1])) left.len--;
-        while (right.len > 0 && _path_is_sep(right.ptr[0])) { right.ptr++; right.len--; }
-        if (str_is_empty(left))  return str_clone(a, right);
+        while (right.len > 0 && _path_is_sep(right.ptr[0])) {
+                right.ptr++;
+                right.len--;
+        }
+        if (str_is_empty(left)) return str_clone(a, right);
         if (str_is_empty(right)) return str_clone(a, left);
         size_t total = left.len + 1 + right.len;
         char*  buf   = arena_push_array(a, char, total + 1);
@@ -198,12 +206,15 @@ Str path_clean(Arena* a, Str p) {
 
         while (i < p.len) {
                 /* skip duplicate separators and backslashes */
-                if (_path_is_sep(p.ptr[i])) { i++; continue; }
+                if (_path_is_sep(p.ptr[i])) {
+                        i++;
+                        continue;
+                }
 
-                size_t     start    = i;
+                size_t start = i;
                 while (i < p.len && !_path_is_sep(p.ptr[i])) i++;
-                size_t     comp_len = i - start;
-                const char *comp    = p.ptr + start;
+                size_t      comp_len = i - start;
+                const char* comp     = p.ptr + start;
 
                 if (comp_len == 1 && comp[0] == '.') {
                         /* "." -- skip */
@@ -220,8 +231,10 @@ Str path_clean(Arena* a, Str p) {
                                 while (out > 0 && buf[out - 1] != '/') out--;
                                 if (out > 0) out--;
                         } else {
-                                /* at start with no root -- keep ".." literally */
-                                buf[out++] = '.'; buf[out++] = '.';
+                                /* at start with no root -- keep ".." literally
+                                 */
+                                buf[out++] = '.';
+                                buf[out++] = '.';
                         }
                         continue;
                 }
@@ -231,7 +244,10 @@ Str path_clean(Arena* a, Str p) {
                 out += comp_len;
         }
 
-        if (out == 0) { buf[0] = '.'; out = 1; }
+        if (out == 0) {
+                buf[0] = '.';
+                out    = 1;
+        }
         buf[out] = '\0';
         return str_buf(buf, out);
 }
@@ -242,7 +258,7 @@ Str path_rel(Arena* a, Str p, Str base) {
         /* find common prefix length at a separator boundary */
         size_t i = 0;
         while (i < cp.len && i < cb.len && cp.ptr[i] == cb.ptr[i]) i++;
-        if (i < cb.len) return str_clone(a, p);  /* base not a prefix */
+        if (i < cb.len) return str_clone(a, p); /* base not a prefix */
         if (i < cp.len && !_path_is_sep(cp.ptr[i])) return str_clone(a, p);
         if (_path_is_sep(cp.ptr[i])) i++;
         return str_buf(cp.ptr + i, cp.len - i);

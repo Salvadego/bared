@@ -2,10 +2,10 @@
 #define BARESYNC_IMPLEMENTATION
 #define BARETHREADS_IMPLEMENTATION
 #define BARETIME_IMPLEMENTATION
-#include "baretime.h"
-#include "barethreads.h"
 #include <stdio.h>
 
+#include "barethreads.h"
+#include "baretime.h"
 
 /* --- Shared state for worker threads --- */
 static Mutex  g_mu = {0};

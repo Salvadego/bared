@@ -1,10 +1,10 @@
 #define BARESTD_IMPLEMENTATION
 #define BAREOS_IMPLEMENTATION
 #define BARETIME_IMPLEMENTATION
-#include "bareos.h"
 #include <stdio.h>
 #include <string.h>
 
+#include "bareos.h"
 
 int main(void) {
         Arena* a = arena_new(KB(32));

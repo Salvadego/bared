@@ -1,7 +1,8 @@
 #define BARETIME_IMPLEMENTATION
 #define BARESTD_IMPLEMENTATION
-#include "baretime.h"
 #include <stdio.h>
+
+#include "baretime.h"
 
 int main(void) {
         Arena* a = arena_new(KB(8));

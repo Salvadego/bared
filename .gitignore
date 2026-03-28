@@ -2,3 +2,4 @@
 .lathe
 tags
 lathe.toml
+*.http
