@@ -193,6 +193,7 @@ static void handle_create_player(HttpResponseWriter* w,
         }
 
         mutex_lock(&app->mu);
+        Player *p = NULL;
         {
                 if (app->count >= MAX_PLAYERS) {
                         mutex_unlock(&app->mu);
@@ -200,7 +201,7 @@ static void handle_create_player(HttpResponseWriter* w,
                         return;
                 }
 
-                Player* p = &app->players[app->count++];
+                p = &app->players[app->count++];
                 memset(p, 0, sizeof *p);
                 p->id     = ++app->next_id;
                 p->active = true;
@@ -225,9 +226,9 @@ static void handle_get_player(HttpResponseWriter* w,
         str_to_i64(id_str, &id);
 
         mutex_lock(&app->mu);
+        Player* found = NULL;
         {
                 size_t  i;
-                Player* found = NULL;
                 for (i = 0; i < app->count; i++)
                         if ((int64_t)app->players[i].id == id) {
                                 found = &app->players[i];
@@ -258,9 +259,9 @@ static void handle_delete_player(HttpResponseWriter* w,
         str_to_i64(id_str, &id);
 
         mutex_lock(&app->mu);
+        Player* found = NULL;
         {
                 size_t  i;
-                Player* found = NULL;
                 for (i = 0; i < app->count; i++)
                         if ((int64_t)app->players[i].id == id) {
                                 found = &app->players[i];
@@ -297,9 +298,9 @@ static void handle_add_score(HttpResponseWriter* w,
         int64_t delta = json_int(json_get(body, "delta"));
 
         mutex_lock(&app->mu);
+        Player* found = NULL;
         {
                 size_t  i;
-                Player* found = NULL;
                 for (i = 0; i < app->count; i++)
                         if ((int64_t)app->players[i].id == id &&
                                         app->players[i].active) {

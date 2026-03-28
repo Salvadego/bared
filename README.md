@@ -1,4 +1,4 @@
-# bare - small C99 utility headers
+# bared - small C99 utility headers
 
 single-header libs for low-level C.
 
@@ -43,11 +43,11 @@ before glibc locks features. the safest pattern for any file:
 
 ## linker flags
 
-| module                | flag                      |
-| ---                   | ---                       |
-| baresync, barethreads | `-lpthread` (Linux/macOS) |
-| baremath              | `-lm`                     |
-| barenet               | `-lws2_32` (Windows only) |
+| module                              | flag                      |
+| ---                                 | ---                       |
+| baresync, barethreads, barecoro     | `-lpthread` (Linux/macOS) |
+| baremath                            | `-lm`                     |
+| barenet                             | `-lws2_32` (Windows only) |
 
 ---
 
@@ -154,7 +154,10 @@ int main(void) {
 - `Reader` / `Writer` thin vtable structs
 - `BufReader` / `BufWriter` with configurable buffer
 - `MemWriter` growable arena buffer
+- `writer_tee` / `writer_null` - broadcast or discard
 - `buf_read_line` for line-by-line reading
+- typed binary I/O: `io_write_u32le`, `io_read_u16be`, `io_write_pstr16`, ...
+- `io_copy`, `io_printf`, `io_read_exactly`
 - optional OS backend (include `bareos.h` first to unlock)
 
 ---
@@ -199,6 +202,17 @@ int main(void) {
 
 ---
 
+**barecoro.h** - stackful coroutines
+
+- `Coro` - full C stack, yield at any call depth
+- `coro_new`, `coro_resume`, `coro_yield`, `coro_done`, `coro_free`
+- `coro_result` - return value after completion
+- `CoroScheduler` - cooperative round-robin over N coroutines
+- POSIX: `ucontext_t`. Windows: Fibers
+- link with `-lpthread`
+
+---
+
 ### processes / signals
 
 **bareproc.h** - process spawning
@@ -233,7 +247,23 @@ int main(void) {
 - `net_send_msg` / `net_recv_msg` - 4-byte length-prefixed framing
 - UDP: `net_udp_bind`, `net_udp_socket`, `net_sendto`, `net_recvfrom`
 - socket options: nodelay, keepalive, reuseaddr, reuseport, timeouts, nonblocking
+- `net_poll` - poll N sockets for READ/WRITE/ERR events with timeout
+- `net_wait_readable` / `net_wait_writable` - single-socket readiness
+- `ConnPool` - lazy-connecting reusable socket pool over barepool
 - static 128-byte error buffer, hot paths allocate nothing
+
+---
+
+**barehttp.h** - HTTP/1.1 server + client
+
+- server: `HttpMux`, prefix router, `http_handle_ctx`, `http_handle_ctx_method`
+- handlers get a per-request `Arena`, shared `ctx->user` for app state
+- `http_json`, `http_text`, `http_html`, `http_redirect`, `http_not_found`
+- `http_path_seg`, `http_query`, `http_header` request accessors
+- `http_serve` (thread-per-conn) and `http_serve_pool` (fixed thread pool)
+- client: `http_get`, `http_post`, `http_request` with redirect following
+- `HttpClientOpts` - timeout, content-type, extra headers
+- requires baretime, barenet, baresync, barethreads, barebuilder
 
 ---
 
@@ -253,6 +283,78 @@ int main(void) {
 - quaternion: mul, conj, slerp, rotate\_vec3
 - `Mat4` column-major: perspective, look\_at, translate, scale, rotate, inverse
 - hashing: SipHash-1-3, xxHash32, xxHash64, Murmur3-32
+
+---
+
+### serialisation
+
+**barejson.h** - JSON parse tree + emitter
+
+- `json_parse(a, src)` - one call, arena-backed value tree, zero-copy strings
+- `json_get`, `json_at`, `json_str`, `json_int`, `json_bool`, `json_num` - safe accessors, never crash on missing/wrong type
+- `json_cstr(a, v)` - NUL-terminated copy for printf
+- deep chaining: `json_str(json_get(json_get(root,"a"),"b"))` always safe
+- emitter: `JsonEmit`, `json_obj_start/end`, `json_arr_start/end`, `json_key`, `json_str_v`, `json_num_i`, `json_bool_v`
+- `json_val` - re-emit any parsed subtree
+- requires barebuilder
+
+---
+
+**barecsv.h** - CSV / TSV reader
+
+- pull parser: `CsvReader`, `csv_next_row`, `csv_next_field`
+- zero-copy for unquoted fields (views into source buffer)
+- RFC 4180 quoting with `""` escape handling (arena for unescaped copies)
+- configurable delimiter (TSV: `cfg.delimiter = '\t'`) and quote char
+- `csv_read_all` - full materialisation into `Slice(Slice(Str))`
+- `csv_read_header` - extract header row as `Slice(Str)`
+- `has_header`, `trim_spaces` options
+
+---
+
+**bareencoding.h** - base64, hex, percent, HTML
+
+- base64: encode (standard / URL-safe) and decode, both alphabets accepted
+- hex: `hex_encode` / `hex_encode_upper` / `hex_decode`, accepts `0x` prefix
+- percent (URI, RFC 3986): `pct_encode`, `pct_encode_path`, `pct_encode_query`, `pct_decode`
+- HTML: `html_escape` / `html_unescape` with `&#N;` numeric entities
+
+---
+
+### testing / observability
+
+**baretest.h** - minimal TAP test runner
+
+- `TEST("name") { }` blocks with per-test timing (requires baretime)
+- `ASSERT`, `ASSERT_EQ`, `ASSERT_NE`, `ASSERT_LT/LE/GT/GE`
+- `ASSERT_STR_EQ`, `ASSERT_STR`, `ASSERT_NULL`, `ASSERT_NOT_NULL`
+- `ASSERT_NEAR(a, b, eps)`, `ASSERT_MEM_EQ(p, q, n)`
+- `SKIP("reason")` - TAP `# SKIP` annotation
+- outputs TAP 13, returns 0 or 1
+
+```c
+TEST("basic") { ASSERT(1 + 1 == 2); }
+TEST("not ready") { SKIP("needs network"); }
+return baretest_finish();
+```
+
+---
+
+**barelog.h** - structured logging
+
+- levels: `LOG_DEBUG` / `LOG_INFO` / `LOG_WARN` / `LOG_ERROR` / `LOG_NONE`
+- `log_set_sink_file`, `log_set_sink_writer`, `log_set_sink_fn`
+- `log_with(key, val)` / `log_with_int(key, n)` - structured fields on next call
+- zero allocation on hot path (static 1 KB format buffer)
+- thread-safe via `log_set_mutex` (requires baresync)
+- requires baretime
+
+```c
+log_set_level(LOG_INFO);
+log_with("user", str_lit("alice"));
+log_info("http", "GET /api/users 200");
+// -> 2025-03-21 14:32:00 INFO  [http] GET /api/users 200 user=alice
+```
 
 ---
 
@@ -277,12 +379,14 @@ chmod +x bare
 
 **options:**
 
-| command                    | what you get                                          |
-| ---                        | ---                                                   |
-| `bare all`                 | every header                                          |
-| `bare core`                | barestd, baretime, bareio, barestrs, bareutf8, bareos |
-| `bare threads`             | barestd, baresync, barethreads, barepool              |
-| `bare barestd.h barenet.h` | specific files                                        |
+| command                        | what you get                                          |
+| ---                            | ---                                                   |
+| `bare all`                     | every header                                          |
+| `bare core`                    | barestd, baretime, bareio, barestrs, bareutf8, bareos |
+| `bare threads`                 | barestd, baresync, barethreads, barepool              |
+| `bare net`                     | barestd, baretime, barenet, baresync, barethreads     |
+| `bare web`                     | net + barebuilder, barejson, bareencoding, barehttp   |
+| `bare barestd.h barenet.h`     | specific files                                        |
 
 **install to a different directory:**
 ```bash
@@ -351,53 +455,24 @@ access, or give each thread its own arena.
 
 ## roadmap
 
-**baretest.h** - minimal test runner
-
-```c
-TEST("basic") { ASSERT(1 + 1 == 2); }
-```
-
-no dependencies, outputs TAP or simple pass/fail, counts failures.
-
-**barelog.h** - structured logging
-
-- levels: DEBUG / INFO / WARN / ERROR
-- timestamped lines via baretime
-- sink abstraction (stderr, file, custom writer)
-- zero allocation on hot path (static format buffer)
-
----
-
 ### medium-term
 
-**barejson.h** - pull parser
+**baredns.h** - async DNS resolver
 
-- event-based, zero allocation during parse
-- arena for string values
-- no schema, no codegen
+**barearena improvements**
 
-**barecsv.h** - CSV / TSV reader
-
-- field iteration, no full materialisation
-- configurable delimiter and quoting
-
-**barenet improvements**
-
-- `net_select` / `net_poll` multiplexing helpers
-- connection pool over barepool
-- address iteration for multi-address DNS results
+- virtual memory backend (mmap/VirtualAlloc) for large arenas with no copying on overflow
+- arena statistics / watermark tracking
 
 ---
 
 ### long-term / speculative
 
-**baredns.h** - async DNS resolver
+**barehttp improvements**
 
-**barehttp.h** - minimal HTTP/1.1 client (request/response framing over barenet)
-
-**barearena improvements**
-    - virtual memory backend (mmap/VirtualAlloc) for large arenas with no copying on overflow
-    - arena statistics / watermark tracking
+- chunked transfer encoding
+- TLS via a pluggable backend
+- HTTP/2 framing
 
 ---
 
