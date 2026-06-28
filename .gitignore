@@ -3,3 +3,5 @@
 tags
 lathe.toml
 *.http
+man_pages
+.owlgrep
